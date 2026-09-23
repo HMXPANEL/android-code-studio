@@ -48,8 +48,13 @@ jobs:
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          sdkmanager --install "platforms;android-34" "build-tools;35.0.0" "platform-tools"
-          sdkmanager --list_installed || true
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -maxdepth 2 -name sdkmanager | head -n 1)"
+          fi
+          echo "Using sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platforms;android-34" "build-tools;35.0.0" "platform-tools"
 
       - name: Change Gradle wrapper permissions
         run: chmod +x ./gradlew

@@ -69,6 +69,11 @@ jobs:
           mkdir -p core/app/build/intermediates/external_file_lib_dex_archives/release/desugarReleaseFileDependencies
           mkdir -p core/app/build/intermediates/l8_art_profile/debug/l8DexDesugarLibDebug
           mkdir -p core/app/build/intermediates/l8_art_profile/release/l8DexDesugarLibRelease
+          # compileReleaseArtProfile expects this file, normally produced by the
+          # (project-disabled) desugar pipeline. An empty baseline profile is
+          # valid and only means "no baseline rules".
+          touch core/app/build/intermediates/l8_art_profile/debug/l8DexDesugarLibDebug/baseline-prof.txt
+          touch core/app/build/intermediates/l8_art_profile/release/l8DexDesugarLibRelease/baseline-prof.txt
 
       - name: Configure signing from secrets (only when available)
         # Production signing credentials are optional. When the secrets are

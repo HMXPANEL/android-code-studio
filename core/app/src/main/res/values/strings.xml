@@ -59,6 +59,29 @@
 
   <string name="edit">Edit</string>
 
-
+  <!-- AI Chat -->
+  <string name="ai_chat_no_project">No project</string>
+  <string name="ai_chat_back_desc">Back</string>
+  <string name="ai_chat_more_desc">More options</string>
+  <string name="ai_chat_empty_title">What would you like me to do?</string>
+  <string name="ai_chat_composer_hint">Ask anything about your project…</string>
+  <string name="ai_chat_attach_image_desc">Attach image</string>
+  <string name="ai_chat_remove_attachment_desc">Remove attachment</string>
+  <string name="ai_chat_attachment_preview_desc">Attached image</string>
+  <string name="ai_chat_send_desc">Send message</string>
+  <string name="ai_chat_mode_desc">Select agent mode</string>
+  <string name="ai_chat_mode_build">Build</string>
+  <string name="ai_chat_mode_plan">Plan</string>
+  <string name="ai_chat_menu_history">History</string>
+  <string name="ai_chat_menu_settings">AI settings</string>
+  <string name="ai_chat_menu_undo">Undo last change</string>
+  <string name="ai_chat_menu_clear">Clear conversation</string>
+  <string name="ai_chat_menu_coming_soon">Coming soon</string>
+  <string name="ai_chat_undo_done">Last modification undone</string>
+  <string name="ai_chat_undo_empty">Nothing to undo</string>
+  <string name="ai_chat_cleared">Conversation cleared</string>
+  <string name="ai_chat_empty_request">Please enter a request</string>
+  <string name="ai_chat_working">AI is working…</string>
+  <string name="ai_chat_failed_to_load_project">Failed to load project</string>
 
 </resources>

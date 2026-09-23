@@ -43,10 +43,12 @@ internal object EditorSidebarActions {
     registry.registerAction(FileTreeSidebarAction(context, ++order))
     registry.registerAction(BuildVariantsSidebarAction(context, ++order))
     registry.registerAction(GitClientAction(context, ++order))
-    registry.registerAction(AIAgentSidebarAction(context, ++order))
+    registry.registerAction(PreferencesSidebarAction(context, ++order))
     registry.registerAction(AssetStudioSidebarAction(context, ++order))
     registry.registerAction(SubModuleSidebarAction(context, ++order))
-    registry.registerAction(PreferencesSidebarAction(context, ++order))
+    // AI Agent is intentionally registered second-last so the second-last
+    // bottom-navigation button opens the AI Chat screen directly.
+    registry.registerAction(AIAgentSidebarAction(context, ++order))
     registry.registerAction(CloseProjectSidebarAction(context, ++order))
   }
 

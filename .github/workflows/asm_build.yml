@@ -1,0 +1,106 @@
+name: Build Android Code Studio
+
+on:
+  push:
+    branches:
+      - "dev"
+      - "main"
+      - "indexing"
+      - "release/**"
+    paths-ignore:
+      - '**.md'
+      - '**.json'
+      - 'fastlane/**'
+      - '.github/workflows/crowdin_contributors.yml'
+  pull_request:
+    branches: [ "dev", "main" ]
+    paths-ignore:
+      - '**.md'
+      - '**.json'
+      - 'fastlane/**'
+      - '.github/workflows/crowdin_contributors.yml'
+  workflow_dispatch:
+
+jobs:
+  build_apks:
+    name: Build Debug + Release APKs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel previous runs
+        uses: styfle/cancel-workflow-action@0.12.1
+        with:
+          access_token: ${{ github.token }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Set up Android SDK packages
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          sdkmanager --install "platforms;android-34" "build-tools;35.0.0" "platform-tools"
+          sdkmanager --list_installed || true
+
+      - name: Change Gradle wrapper permissions
+        run: chmod +x ./gradlew
+
+      - name: Configure signing from secrets (only when available)
+        # Production signing credentials are optional. When the secrets are
+        # absent, the build falls back to the debug keystore (see
+        # core/app/build.gradle.kts) so CI still produces both APKs.
+        # local.properties is git-ignored and never committed.
+        run: |
+          if [ -n "${{ secrets.SIGNING_STORE_PASSWORD }}" ] && [ -n "${{ secrets.SIGNING_KEY_PASSWORD }}" ]; then
+            {
+              echo "signing.storeFile=signing/signing-key.jks"
+              echo "signing.storePassword=${{ secrets.SIGNING_STORE_PASSWORD }}"
+              echo "signing.keyAlias=androidcs"
+              echo "signing.keyPassword=${{ secrets.SIGNING_KEY_PASSWORD }}"
+            } >> local.properties
+            echo "Production signing configured from secrets."
+          else
+            echo "No signing secrets present; CI will use the debug keystore fallback."
+          fi
+
+      - name: Assemble Debug APK
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: ./gradlew :core:app:assembleDebug --stacktrace
+
+      - name: Assemble Release APK
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: ./gradlew :core:app:assembleRelease --stacktrace
+
+      - name: List generated APKs
+        run: |
+          echo "=== APK outputs ==="
+          find core/app/build/outputs/apk -type f -name "*.apk" -exec ls -la {} \; || echo "No APK directory found"
+          echo "=== Size check ==="
+          find core/app/build/outputs/apk -type f -name "*.apk" -size +0c -exec echo "OK: {}" \; || echo "Size check failed"
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: core/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: core/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error

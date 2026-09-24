@@ -167,28 +167,9 @@ internal object EditorSidebarActions {
               // "AI Agent", project name, menu). Hide the shared sidebar
               // title/subtitle while it is selected so there is no duplicate
               // parent header. Other destinations are unaffected.
-              val isAiChat = item.id == AIAgentSidebarAction.ID
-              if (isAiChat) {
+              if (item.id == AIAgentSidebarAction.ID) {
                 titleRef.get()?.visibility = android.view.View.GONE
                 subtitleRef.get()?.visibility = android.view.View.GONE
-              }
-
-              // The full-screen chat distributes its conversation/composer
-              // with layout weights, which cannot resolve to a positive
-              // height inside the scrolling sidebar container on its own
-              // (only the wrap_content header survived). Pin this
-              // destination's container to the measured viewport height so
-              // the chat deterministically fills the available space; the
-              // inner message list then scrolls while the composer stays
-              // fixed. Reset for every other destination.
-              val scrollView = binding.sidebarScroll
-              if (isAiChat) {
-                binding.fragmentContainer.minimumHeight = scrollView.height
-                scrollView.post {
-                  binding.fragmentContainer.minimumHeight = scrollView.height
-                }
-              } else {
-                binding.fragmentContainer.minimumHeight = 0
               }
 
               val updatedItems =

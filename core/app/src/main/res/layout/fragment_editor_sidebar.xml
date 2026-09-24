@@ -34,8 +34,11 @@
             android:visibility="gone"
             />
         
-        <!-- ScrollView for vertical scrolling -->
-        <ScrollView
+        <!-- ScrollView for vertical scrolling.
+             NestedScrollView cooperates with the inner conversation
+             RecyclerView of the full-screen AI Chat (nested scrolling),
+             and behaves like a regular ScrollView for the other pages. -->
+        <androidx.core.widget.NestedScrollView
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
@@ -49,7 +52,7 @@
                 android:layout_height="wrap_content"
                 app:defaultNavHost="false" />
 
-        </ScrollView>
+        </androidx.core.widget.NestedScrollView>
 
     </LinearLayout>
 

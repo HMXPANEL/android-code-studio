@@ -163,6 +163,15 @@ internal object EditorSidebarActions {
               updateTitleVisibility(item.title)
               updateSubtitleVisibility(item.subtitle)
 
+              // The AI Chat screen draws its own single header (back button,
+              // "AI Agent", project name, menu). Hide the shared sidebar
+              // title/subtitle while it is selected so there is no duplicate
+              // parent header. Other destinations are unaffected.
+              if (item.id == AIAgentSidebarAction.ID) {
+                titleRef.get()?.visibility = android.view.View.GONE
+                subtitleRef.get()?.visibility = android.view.View.GONE
+              }
+
               val updatedItems =
                   navigationItems.map { navItem -> 
                     navItem.copy(isSelected = navItem.id == item.id) 

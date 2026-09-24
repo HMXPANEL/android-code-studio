@@ -39,6 +39,7 @@
              RecyclerView of the full-screen AI Chat (nested scrolling),
              and behaves like a regular ScrollView for the other pages. -->
         <androidx.core.widget.NestedScrollView
+            android:id="@+id/sidebar_scroll"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"

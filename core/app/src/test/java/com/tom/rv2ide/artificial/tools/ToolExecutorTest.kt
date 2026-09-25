@@ -207,18 +207,22 @@ class ToolExecutorTest {
 
   @Test
   fun `coroutine cancellation sanity`() = runBlocking {
+    // join() does NOT rethrow a child's CancellationException (unlike
+    // Deferred.await()); capture inside the child instead.
+    var outcome = "unset"
     val job = launch {
-      delay(30_000L)
+      try {
+        delay(30_000L)
+        outcome = "returned normally"
+      } catch (e: CancellationException) {
+        outcome = "threw CancellationException"
+      }
     }
     delay(50)
     job.cancel()
-    var threw = false
-    try {
-      job.join()
-    } catch (e: CancellationException) {
-      threw = true
-    }
-    assertTrue("basic coroutine cancellation must work in this environment", threw)
+    job.join()
+    assertTrue("basic coroutine cancellation must work in this environment", outcome == "threw CancellationException")
+    assertTrue(job.isCancelled)
   }
 
   @Test
@@ -281,21 +285,19 @@ class ToolExecutorTest {
               ctx(), ToolPermission.buildDefault(false)
           ) { true }
           outcome = "result ok=${r.ok} err=${r.error}"
+        } catch (e: CancellationException) {
+          outcome = "threw CancellationException"
         } catch (e: Throwable) {
           outcome = "threw ${e::class.java.name}: ${e.message}"
         }
       }
       delay(50)
       job.cancel()
-      try {
-        job.join()
-        outcome += " | join clean"
-      } catch (e: CancellationException) {
-        outcome += " | join threw CancellationException"
-      }
+      job.join()
     }
-    if (!outcome.contains("join threw")) {
-      throw IllegalStateException("DIAG-OUTCOME: $outcome")
-    }
+    assertTrue(
+        "cancellation must propagate out of execute, got: $outcome",
+        outcome == "threw CancellationException"
+    )
   }
 }

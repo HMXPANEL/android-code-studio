@@ -18,11 +18,11 @@
 package com.tom.rv2ide.artificial.tools
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.withTimeout
-import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Single chokepoint for every tool execution:
@@ -88,41 +88,39 @@ open class ToolExecutor(
       }
     }
 
-    // Cancellation discrimination: withTimeout reports its own timeout and an
-    // external cancel with the same TimeoutCancellationException type, so an
-    // explicit flag is tracked instead. Job listeners fire deterministically
-    // on cancellation (including cancel-before-start races); normal completion
-    // carries a null cause and never sets the flag.
-    val externallyCancelled = AtomicBoolean(false)
-    fun arm(job: Job?): kotlinx.coroutines.DisposableHandle? {
-      if (job == null) return null
-      return job.invokeOnCompletion { cause ->
-        if (cause is CancellationException) {
-          externallyCancelled.set(true)
+    // Timeout and cancellation, made unambiguous on purpose: withTimeout()
+    // reports its own timeout and an external cancel with the same exception
+    // type, which once swallowed a real cancellation. Instead the tool runs as
+    // a child (outer cancellation propagates naturally as JobCancellation- or
+    // CancellationException) while a sibling timer cancels it with a distinct
+    // TimeoutCancellationException only on a genuine timeout.
+    val raw: ToolResult = try {
+      coroutineScope {
+        val runner = async {
+          tool.execute(call.args, ctx)
+        }
+        val timer = launch {
+          delay(tool.timeoutSec * 1000L)
+          runner.cancel(
+              TimeoutCancellationException(
+                  "Tool '${tool.id}' timed out after ${tool.timeoutSec}s and was stopped."
+              )
+          )
+        }
+        try {
+          runner.await()
+        } finally {
+          timer.cancel()
         }
       }
-    }
-    val ambientJob = currentCoroutineContext()[Job]
-    val handleAmbient = arm(ambientJob)
-    val handleRun = if (ctx.job !== ambientJob) arm(ctx.job) else null
-    val raw: ToolResult = try {
-      withTimeout(tool.timeoutSec * 1000L) {
-        tool.execute(call.args, ctx)
-      }
     } catch (e: TimeoutCancellationException) {
-      if (externallyCancelled.get()) {
-        throw e
-      }
       return ToolResult.failure(
-          "Tool '${tool.id}' timed out after ${tool.timeoutSec}s and was stopped."
+          e.message ?: "Tool '${tool.id}' timed out after ${tool.timeoutSec}s and was stopped."
       )
     } catch (e: CancellationException) {
       throw e
     } catch (e: Exception) {
       return ToolResult.failure("Tool '${tool.id}' failed: ${e.message}")
-    } finally {
-      handleAmbient?.dispose()
-      handleRun?.dispose()
     }
 
     if (raw.text.length <= outputCharCap) {

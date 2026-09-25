@@ -33,6 +33,8 @@ import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /** Pure command gate: block-list + timeout/output constants. JVM-testable. */
@@ -139,7 +141,17 @@ class RunCommandTool : Tool {
     drain.isDaemon = true
     drain.start()
     try {
-      val finished = process.waitFor(timeoutSec, TimeUnit.SECONDS)
+      // Slice the wait so coroutine cancellation is honored promptly: a
+      // blocking waitFor alone would ignore cancel until process exit.
+      val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+      var finished = false
+      while (System.currentTimeMillis() < deadline) {
+        currentCoroutineContext().ensureActive()
+        if (process.waitFor(500, TimeUnit.MILLISECONDS)) {
+          finished = true
+          break
+        }
+      }
       if (!finished) {
         process.destroyForcibly()
         drain.join(2000)

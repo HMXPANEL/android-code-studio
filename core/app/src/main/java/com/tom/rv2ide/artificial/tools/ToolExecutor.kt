@@ -19,6 +19,8 @@ package com.tom.rv2ide.artificial.tools
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -90,6 +92,11 @@ open class ToolExecutor(
         tool.execute(call.args, ctx)
       }
     } catch (e: TimeoutCancellationException) {
+      // withTimeout reports its own timeout and outer cancellation with the
+      // same type. Our coroutine context is cancelled ONLY on external cancel,
+      // so re-check it to tell the two apart: cancellation must propagate,
+      // genuine timeouts become results.
+      currentCoroutineContext().ensureActive()
       return ToolResult.failure(
           "Tool '${tool.id}' timed out after ${tool.timeoutSec}s and was stopped."
       )

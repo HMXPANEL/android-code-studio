@@ -98,34 +98,7 @@ class BuildProjectTool(
     }
 
     return try {
-      val result = future.get(timeoutSec, TimeUnit.SECONDS)
-      if (result == null) {
-        ToolResult.failure("Build returned no result for ${tasks.joinToString(",")}.")
-      } else if (result.isSuccessful) {
-        ToolResult.success(
-            "Build succeeded: ${tasks.joinToString(",")}.",
-            stats = mapOf("tasks" to tasks.joinToString(","))
-        )
-      } else {
-        ToolResult.failure(
-            "Build failed: ${tasks.joinToString(",")} " +
-                "(reason: ${result.failure?.name ?: "unknown"}). " +
-                "Read the relevant files and try a fix.",
-            stats = mapOf(
-                "tasks" to tasks.joinToString(","),
-                "failure" to (result.failure?.name ?: "unknown")
-            )
-        )
-      }
-    } catch (e: TimeoutException) {
-      try {
-        service.cancelCurrentBuild()
-      } catch (cancelError: Exception) {
-        // Best effort; the timeout result below is what matters.
-      }
-      ToolResult.failure(
-          "Build timed out after ${timeoutSec}s and a cancellation was requested."
-      )
+      pollForResult(service, future, tasks, timeoutSec)
     } catch (e: InterruptedException) {
       Thread.currentThread().interrupt()
       try {
@@ -145,6 +118,55 @@ class BuildProjectTool(
       ToolResult.failure("Build failed to execute: ${e.cause?.message ?: e.message}")
     } catch (e: Exception) {
       ToolResult.failure("Build error: ${e.message}")
+    }
+  }
+
+  /**
+   * Polls the build future in short slices so coroutine cancellation is
+   * honored promptly (a single blocking get() would ignore cancel until the
+   * build finishes). Deadline expiry requests cancellation and reports timeout.
+   */
+  private suspend fun pollForResult(
+      service: BuildService,
+      future: java.util.concurrent.Future<com.tom.rv2ide.tooling.api.messages.result.TaskExecutionResult?>,
+      tasks: List<String>,
+      timeoutSec: Long
+  ): ToolResult {
+    val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+    while (true) {
+      try {
+        val result = future.get(500, TimeUnit.MILLISECONDS)
+        if (result == null) {
+          return ToolResult.failure("Build returned no result for ${tasks.joinToString(",")}.")
+        }
+        if (result.isSuccessful) {
+          return ToolResult.success(
+              "Build succeeded: ${tasks.joinToString(",")}.",
+              stats = mapOf("tasks" to tasks.joinToString(","))
+          )
+        }
+        return ToolResult.failure(
+            "Build failed: ${tasks.joinToString(",")} " +
+                "(reason: ${result.failure?.name ?: "unknown"}). " +
+                "Read the relevant files and try a fix.",
+            stats = mapOf(
+                "tasks" to tasks.joinToString(","),
+                "failure" to (result.failure?.name ?: "unknown")
+            )
+        )
+      } catch (e: TimeoutException) {
+        kotlinx.coroutines.ensureActive()
+        if (System.currentTimeMillis() >= deadline) {
+          try {
+            service.cancelCurrentBuild()
+          } catch (cancelError: Exception) {
+            // Best effort; the timeout result below is what matters.
+          }
+          return ToolResult.failure(
+              "Build timed out after ${timeoutSec}s and a cancellation was requested."
+          )
+        }
+      }
     }
   }
 }

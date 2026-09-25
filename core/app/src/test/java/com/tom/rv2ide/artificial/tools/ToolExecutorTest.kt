@@ -233,17 +233,24 @@ class ToolExecutorTest {
     dead.cancel()
     val deadCtx = ToolContext(File("/proj"), false, "t", dead, 0)
     var executed = false
-    ToolRegistry.register(
-        object : Tool by tool("local:probe") { _, _ ->
-          executed = true
-          ToolResult.success("x")
-        } {
-          override val id: String = "local:probe"
-          override val schema: ToolSchema = ToolSchema(
-              listOf(ToolInputField("path", ToolInputType.STRING, "p", true))
-          )
-        }
-    )
+    val probe = object : Tool {
+      override val id: String = "local:probe"
+      override val namespace: String = "local"
+      override val description: String = "probe"
+      override val schema: ToolSchema = ToolSchema(
+          listOf(ToolInputField("path", ToolInputType.STRING, "p", true))
+      )
+      override val kind: ToolKind = ToolKind.READ
+      override val readOnlyHint: Boolean = true
+      override val timeoutSec: Long = 30L
+      override val confirmPolicy: ConfirmPolicy = ConfirmPolicy.NEVER
+      override val visible: Boolean = true
+      override suspend fun execute(args: Map<String, Any?>, ctx: ToolContext): ToolResult {
+        executed = true
+        return ToolResult.success("x")
+      }
+    }
+    ToolRegistry.register(probe)
     var sawCancel = false
     try {
       exec.execute(

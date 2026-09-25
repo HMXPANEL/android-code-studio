@@ -31,6 +31,7 @@ import com.tom.rv2ide.artificial.tools.ToolResult
 import com.tom.rv2ide.artificial.tools.builtins.BoundedWalk
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
@@ -184,7 +185,8 @@ class AgentController(
                   projectRoot = projectRoot,
                   events = events,
                   onConfirm = onConfirm,
-                  ignoredExtra = converted.size - 1
+                  ignoredExtra = converted.size - 1,
+                  nudge = nudge
               )
               if (verdict == LoopAction.STOP) return run
               continue
@@ -208,7 +210,8 @@ class AgentController(
             projectRoot = projectRoot,
             events = events,
             onConfirm = onConfirm,
-            ignoredExtra = parsed.calls.size - 1
+            ignoredExtra = parsed.calls.size - 1,
+            nudge = nudge
         )
         if (verdict == LoopAction.STOP) return run
       }
@@ -233,7 +236,8 @@ class AgentController(
       projectRoot: File,
       events: (AgentEvents) -> Unit,
       onConfirm: suspend (ToolCall) -> Boolean,
-      ignoredExtra: Int
+      ignoredExtra: Int,
+      nudge: NudgeState
   ): LoopAction {
     run.transitionTo(AgentState.PROPOSING_TOOLS)
     events(AgentEvents.ToolsProposed(listOf(call)))

@@ -34,6 +34,7 @@ import java.io.FileInputStream
 import java.io.InputStreamReader
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.ensureActive
 
 /** local:search_files — bounded content search. READ, never confirms. */
 class SearchFilesTool : Tool {

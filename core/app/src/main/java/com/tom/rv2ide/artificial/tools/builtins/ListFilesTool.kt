@@ -30,6 +30,7 @@ import com.tom.rv2ide.artificial.tools.ToolVisibility
 import com.tom.rv2ide.artificial.tools.Truncate
 import java.io.File
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.ensureActive
 
 /** Directories never descended into by agent tools. */
 internal val AGENT_SKIP_DIRS = setOf(

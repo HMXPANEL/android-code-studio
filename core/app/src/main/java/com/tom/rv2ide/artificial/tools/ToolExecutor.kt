@@ -18,6 +18,7 @@
 package com.tom.rv2ide.artificial.tools
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -106,7 +107,9 @@ open class ToolExecutor(
     // TimeoutCancellationException only on a genuine timeout.
     val raw: ToolResult = try {
       coroutineScope {
-        val runner = async {
+        // Tool bodies do blocking I/O and must never run on the caller
+        // (usually main). Cancellation still propagates across dispatchers.
+        val runner = async(Dispatchers.IO) {
           tool.execute(call.args, ctx)
         }
         val timer = launch {

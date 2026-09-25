@@ -69,6 +69,15 @@ class AgentRun(
 
   var pendingApproval: ToolCall? = null
 
+  /** Absolute paths changed by successful write/edit/delete steps this run. */
+  val changedFiles = mutableListOf<String>()
+
+  fun trackChange(path: String) {
+    if (!changedFiles.contains(path)) {
+      changedFiles.add(path)
+    }
+  }
+
   val startedAt: Long = System.currentTimeMillis()
   var updatedAt: Long = startedAt
     private set

@@ -105,7 +105,13 @@ data class ToolContext(
     val planMode: Boolean,
     val runId: String,
     val job: Job,
-    val stepIndex: Int
+    val stepIndex: Int,
+    /**
+     * Called by file tools after a write/edit/delete with
+     * (path, previousContent, newContent, success) so agent-level
+     * modification history and undo stay consistent. Null in tests.
+     */
+    val onFileModified: ((String, String?, String, Boolean) -> Unit)? = null
 )
 
 /** One normalized tool invocation (produced by a [com.tom.rv2ide.artificial.agent.ToolCallSource]). */

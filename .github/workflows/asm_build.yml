@@ -99,6 +99,12 @@ jobs:
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: ./gradlew :core:app:assembleDebug --stacktrace
 
+      - name: Run unit tests
+        # Compiles AND executes the JVM unit tests (agent runtime contracts,
+        # parser, permissions, budgets, guards). Strengthens the gate; the
+        # APK steps below still run even if new tests are added later.
+        run: ./gradlew :core:app:testDebugUnitTest --stacktrace
+
       - name: Assemble Release APK
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}

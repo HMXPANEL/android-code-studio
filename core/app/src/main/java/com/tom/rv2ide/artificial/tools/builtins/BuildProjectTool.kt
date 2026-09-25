@@ -32,6 +32,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
@@ -100,7 +101,7 @@ class BuildProjectTool(
     }
 
     return try {
-      pollForResult(service, future, tasks, timeoutSec)
+      pollForResult(service, future, tasks, timeoutSec, ctx.job)
     } catch (e: InterruptedException) {
       Thread.currentThread().interrupt()
       try {
@@ -132,7 +133,8 @@ class BuildProjectTool(
       service: BuildService,
       future: java.util.concurrent.Future<com.tom.rv2ide.tooling.api.messages.result.TaskExecutionResult?>,
       tasks: List<String>,
-      timeoutSec: Long
+      timeoutSec: Long,
+      runJob: Job
   ): ToolResult {
     val deadline = System.currentTimeMillis() + timeoutSec * 1000L
     while (true) {
@@ -158,6 +160,7 @@ class BuildProjectTool(
         )
       } catch (e: TimeoutException) {
         currentCoroutineContext().ensureActive()
+        runJob.ensureActive()
         if (System.currentTimeMillis() >= deadline) {
           try {
             service.cancelCurrentBuild()

@@ -18,10 +18,10 @@
 package com.tom.rv2ide.artificial.tools
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Single chokepoint for every tool execution:
@@ -87,16 +87,31 @@ open class ToolExecutor(
       }
     }
 
+    // Cancellation discrimination: withTimeout reports its own timeout and an
+    // external cancel with the same TimeoutCancellationException type, so an
+    // explicit flag is tracked instead. Job listeners fire deterministically
+    // on cancellation (including cancel-before-start races); normal completion
+    // carries a null cause and never sets the flag.
+    val externallyCancelled = AtomicBoolean(false)
+    fun arm(job: Job?): kotlinx.coroutines.DisposableHandle? {
+      if (job == null) return null
+      return job.invokeOnCompletion { cause ->
+        if (cause is CancellationException) {
+          externallyCancelled.set(true)
+        }
+      }
+    }
+    val ambientJob = coroutineContext[Job]
+    val handleAmbient = arm(ambientJob)
+    val handleRun = if (ctx.job !== ambientJob) arm(ctx.job) else null
     val raw: ToolResult = try {
       withTimeout(tool.timeoutSec * 1000L) {
         tool.execute(call.args, ctx)
       }
     } catch (e: TimeoutCancellationException) {
-      // withTimeout reports its own timeout and outer cancellation with the
-      // same type. Our coroutine context is cancelled ONLY on external cancel,
-      // so re-check it to tell the two apart: cancellation must propagate,
-      // genuine timeouts become results.
-      currentCoroutineContext().ensureActive()
+      if (externallyCancelled.get()) {
+        throw e
+      }
       return ToolResult.failure(
           "Tool '${tool.id}' timed out after ${tool.timeoutSec}s and was stopped."
       )
@@ -104,6 +119,9 @@ open class ToolExecutor(
       throw e
     } catch (e: Exception) {
       return ToolResult.failure("Tool '${tool.id}' failed: ${e.message}")
+    } finally {
+      handleAmbient?.dispose()
+      handleRun?.dispose()
     }
 
     if (raw.text.length <= outputCharCap) {

@@ -31,6 +31,7 @@ import com.tom.rv2ide.artificial.tools.ToolResult
 import com.tom.rv2ide.artificial.tools.builtins.BoundedWalk
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
@@ -95,7 +96,9 @@ class AgentController(
       onConfirm: suspend (ToolCall) -> Boolean,
       legacyFallback: Boolean = true
   ): AgentRun {
-    val run = trackRun(AgentRun(mode = mode))
+    // Parent the run job to the caller: UI cancellation then cancels the run
+    // automatically, while run.cancel() stays local (SupervisorJob).
+    val run = trackRun(AgentRun(mode = mode, parentJob = coroutineContext[Job]))
     val permission = permissionFor(mode)
     val planMode = mode == RunMode.PLAN
     val snippetParser = SnippetParser()
@@ -454,7 +457,7 @@ class AgentController(
     }
     builder.append("\n").append(registry.describeForPrompt(planMode)).append("\n")
     builder.append("\nProject tree (truncated):\n")
-    builder.append(renderTree(projectRoot)).append("\n")
+    builder.append(renderTree(projectRoot, run.job)).append("\n")
     builder.append("\nConversation so far:\n")
     val tail = run.transcript.takeLast(MAX_TRANSCRIPT_TURNS * 2)
     tail.forEach { entry ->
@@ -478,12 +481,13 @@ class AgentController(
     return prompt
   }
 
-  internal suspend fun renderTree(projectRoot: File): String {
+  internal suspend fun renderTree(projectRoot: File, runJob: Job?): String {
     return try {
       val entries = BoundedWalk.list(
           root = projectRoot,
           maxDepth = 4,
-          maxEntries = 100
+          maxEntries = 100,
+          runJob = runJob
       ).filter { !it.truncated }
       if (entries.isEmpty()) {
         "(empty project)"

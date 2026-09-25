@@ -147,6 +147,7 @@ class RunCommandTool : Tool {
       var finished = false
       while (System.currentTimeMillis() < deadline) {
         currentCoroutineContext().ensureActive()
+        ctx.job.ensureActive()
         if (process.waitFor(500, TimeUnit.MILLISECONDS)) {
           finished = true
           break

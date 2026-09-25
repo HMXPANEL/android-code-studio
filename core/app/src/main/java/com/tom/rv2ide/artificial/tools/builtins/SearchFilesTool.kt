@@ -125,6 +125,7 @@ class SearchFilesTool : Tool {
 
     fun walk(dir: File, depth: Int): Boolean {
       job?.ensureActive()
+      ctx.job.ensureActive()
       val children = try {
         dir.listFiles()?.sortedBy { it.name } ?: return true
       } catch (e: Exception) {

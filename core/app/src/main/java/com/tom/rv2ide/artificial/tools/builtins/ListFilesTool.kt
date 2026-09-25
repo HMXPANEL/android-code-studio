@@ -49,14 +49,19 @@ internal object BoundedWalk {
       maxEntries: Int,
       includeFiles: Boolean = true,
       includeDirs: Boolean = true,
-      extensionFilter: Set<String>? = null
+      extensionFilter: Set<String>? = null,
+      runJob: kotlinx.coroutines.Job? = null
   ): List<Entry> {
     val out = mutableListOf<Entry>()
     var truncated = false
-    val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+    val ambient = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+    fun checkCancelled() {
+      ambient?.ensureActive()
+      runJob?.ensureActive()
+    }
     fun walk(dir: File, depth: Int): Boolean {
       // Cooperative cancellation so large trees never hang a run.
-      job?.ensureActive()
+      checkCancelled()
       val children = try {
         dir.listFiles()?.sortedBy { it.name } ?: return true
       } catch (e: Exception) {
@@ -126,7 +131,7 @@ class ListFilesTool : Tool {
     if (!base.isDirectory) {
       return ToolResult.failure("'$dirArg' is a file, not a directory.")
     }
-    val entries = BoundedWalk.list(base, depth, maxEntries)
+    val entries = BoundedWalk.list(base, depth, maxEntries, runJob = ctx.job)
     val truncated = entries.any { it.truncated }
     val lines = entries.filter { !it.truncated }.map { entry ->
       val rel = try {

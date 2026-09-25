@@ -190,6 +190,22 @@ class ToolExecutorTest {
   }
 
   @Test
+  fun `genuine timeout becomes result not cancellation`() = runBlocking {
+    ToolRegistry.register(
+        tool("local:slow-but-bounded", timeout = 1) { _, _ ->
+          delay(30_000L)
+          ToolResult.success("never")
+        }
+    )
+    val result = exec.execute(
+        ToolCall("local:slow-but-bounded", mapOf("path" to "x"), "c", "r"),
+        ctx(), ToolPermission.buildDefault(false)
+    ) { true }
+    assertFalse(result.ok)
+    assertTrue(result.error!!.contains("timed out"))
+  }
+
+  @Test
   fun `cancellation propagates`() {
     var sawCancel = false
     runBlocking {

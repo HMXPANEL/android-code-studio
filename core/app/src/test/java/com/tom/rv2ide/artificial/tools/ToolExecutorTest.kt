@@ -235,6 +235,8 @@ class ToolExecutorTest {
         outcome += " | join threw CancellationException"
       }
     }
-    assertTrue("diagnostic outcome: $outcome", outcome.contains("join threw"))
+    if (!outcome.contains("join threw")) {
+      throw IllegalStateException("DIAG-OUTCOME: $outcome")
+    }
   }
 }

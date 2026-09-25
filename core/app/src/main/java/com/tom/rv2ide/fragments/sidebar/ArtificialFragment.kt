@@ -89,6 +89,7 @@ class ArtificialFragment(
     private lateinit var attachmentRow: View
     private lateinit var attachmentPreview: ImageView
     private lateinit var removeAttachmentBtn: MaterialButton
+    private lateinit var runStatusText: MaterialTextView
     private lateinit var messageAdapter: ChatMessageAdapter
 
     private var codeCompletionManager: CodeCompletionManager? = null
@@ -204,6 +205,7 @@ class ArtificialFragment(
         attachmentRow = view.findViewById(R.id.attachmentPreviewRow)
         attachmentPreview = view.findViewById(R.id.attachmentPreview)
         removeAttachmentBtn = view.findViewById(R.id.removeAttachmentBtn)
+        runStatusText = view.findViewById(R.id.runStatusText)
 
         messageAdapter = ChatMessageAdapter(onFileClick = { openFileInEditor(it) })
         messageList.layoutManager = LinearLayoutManager(requireContext())
@@ -384,6 +386,15 @@ class ArtificialFragment(
         }
 
         viewModel.agentMode.observe(viewLifecycleOwner) { updateModeButton() }
+
+        viewModel.runStatus.observe(viewLifecycleOwner) { status ->
+            if (status.isNullOrBlank()) {
+                runStatusText.visibility = View.GONE
+            } else {
+                runStatusText.visibility = View.VISIBLE
+                runStatusText.text = status
+            }
+        }
     }
 
     private fun setupListeners() {

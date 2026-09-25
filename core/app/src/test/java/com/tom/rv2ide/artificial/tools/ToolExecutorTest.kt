@@ -206,6 +206,58 @@ class ToolExecutorTest {
   }
 
   @Test
+  fun `coroutine cancellation sanity`() = runBlocking {
+    val job = launch {
+      delay(30_000L)
+    }
+    delay(50)
+    job.cancel()
+    var threw = false
+    try {
+      job.join()
+    } catch (e: CancellationException) {
+      threw = true
+    }
+    assertTrue("basic coroutine cancellation must work in this environment", threw)
+  }
+
+  @Test
+  fun `pre-cancelled run never executes tool`() = runBlocking {
+    ToolRegistry.register(
+        tool("local:wait") { _, _ ->
+          delay(30_000L)
+          ToolResult.success("never")
+        }
+    )
+    val dead = Job()
+    dead.cancel()
+    val deadCtx = ToolContext(File("/proj"), false, "t", dead, 0)
+    var executed = false
+    ToolRegistry.register(
+        object : Tool by tool("local:probe") { _, _ ->
+          executed = true
+          ToolResult.success("x")
+        } {
+          override val id: String = "local:probe"
+          override val schema: ToolSchema = ToolSchema(
+              listOf(ToolInputField("path", ToolInputType.STRING, "p", true))
+          )
+        }
+    )
+    var sawCancel = false
+    try {
+      exec.execute(
+          ToolCall("local:probe", mapOf("path" to "x"), "c", "r"),
+          deadCtx, ToolPermission.buildDefault(false)
+      ) { true }
+    } catch (e: CancellationException) {
+      sawCancel = true
+    }
+    assertTrue("cancelled context must propagate", sawCancel)
+    assertFalse("tool must not run when already cancelled", executed)
+  }
+
+  @Test
   fun `cancellation propagates`() {
     var outcome = "unset"
     runBlocking {

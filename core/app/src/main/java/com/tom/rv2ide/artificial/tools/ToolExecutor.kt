@@ -21,6 +21,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /**
@@ -50,6 +51,8 @@ open class ToolExecutor(
       permission: ToolPermission,
       onConfirm: suspend (ToolCall) -> Boolean
   ): ToolResult {
+    // Fail fast for dead runs before doing any work.
+    ctx.job.ensureActive()
     val tool = registry.lookup(call.name)
         ?: return ToolResult.failure(
             "Unknown tool '${call.name}'. Available tools: " +

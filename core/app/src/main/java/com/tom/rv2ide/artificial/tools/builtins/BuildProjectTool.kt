@@ -32,6 +32,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import kotlinx.coroutines.currentCoroutineContext
 
 /**
  * local:build_project — Gradle builds through the existing [BuildService].
@@ -155,7 +156,7 @@ class BuildProjectTool(
             )
         )
       } catch (e: TimeoutException) {
-        kotlinx.coroutines.ensureActive()
+        currentCoroutineContext().ensureActive()
         if (System.currentTimeMillis() >= deadline) {
           try {
             service.cancelCurrentBuild()

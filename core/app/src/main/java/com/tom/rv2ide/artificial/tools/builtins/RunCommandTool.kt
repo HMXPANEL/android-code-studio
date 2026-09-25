@@ -106,7 +106,7 @@ class RunCommandTool : Tool {
     }
   }
 
-  private fun runProcess(command: String, ctx: ToolContext, timeoutSec: Long): ToolResult {
+  private suspend fun runProcess(command: String, ctx: ToolContext, timeoutSec: Long): ToolResult {
     val process = try {
       executeProcessAsync {
         this.command = listOf("sh", "-c", command)

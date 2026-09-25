@@ -100,6 +100,7 @@ class AgentController(
     // Parent the run job to the caller: UI cancellation then cancels the run
     // automatically, while run.cancel() stays local (SupervisorJob).
     val run = trackRun(AgentRun(mode = mode, parentJob = currentCoroutineContext()[Job]))
+    events(AgentEvents.RunStarted(run.runId, mode))
     val permission = permissionFor(mode)
     val planMode = mode == RunMode.PLAN
     val snippetParser = SnippetParser()
@@ -142,6 +143,14 @@ class AgentController(
           throw e
         } catch (e: Exception) {
           return failRun(run, events, "AI request failed: ${e.message}")
+        }
+
+        // Late-result guard: if cancellation landed while the provider call
+        // was in flight, abandon the reply instead of letting it flip a
+        // CANCELLED run back toward DONE.
+        run.job.ensureActive()
+        if (run.state == AgentState.CANCELLED) {
+          throw CancellationException("Run cancelled before processing provider reply.")
         }
 
         run.addEntry(EntryRole.THOUGHT, reply.take(MAX_THOUGHT_CHARS))
@@ -243,6 +252,11 @@ class AgentController(
       ignoredExtra: Int,
       nudge: NudgeState
   ): LoopAction {
+    // Never start another tool on a dead run (cancellation landed between turns).
+    run.job.ensureActive()
+    if (run.state == AgentState.CANCELLED) {
+      throw CancellationException("Run cancelled before tool execution.")
+    }
     run.transitionTo(AgentState.PROPOSING_TOOLS)
     events(AgentEvents.ToolsProposed(listOf(call)))
     if (ignoredExtra > 0) {

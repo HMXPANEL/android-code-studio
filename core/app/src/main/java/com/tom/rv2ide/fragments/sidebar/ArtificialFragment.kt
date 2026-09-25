@@ -435,19 +435,51 @@ class ArtificialFragment(
         viewModel.setPendingAttachment(null)
         codeCompletionManager?.clearSuggestion()
 
-        if (isAgentLoopEnabled()) {
-            runAgentLoop(text)
+        // Capture the mode synchronously from storage at send time. Reading
+        // LiveData.value here is racy (mode changes post with postValue), which
+        // previously let a run start under the wrong profile.
+        val mode = readPersistedMode()
+        android.util.Log.d(TAG_AGENT, "AGENT_MODE selected=$mode loop=${isAgentLoopEnabled()}")
+
+        // A previous run (if any) is cancelled before the new one starts.
+        if (executionJob?.isActive == true) {
+            android.util.Log.d(TAG_AGENT, "RUN_CANCEL_REQUESTED reason=new-message")
+            agentController?.cancelActiveRun()
+        }
+
+        if (isAgentLoopEnabled() || mode == AIAgentViewModel.AgentMode.PLAN) {
+            // PLAN must always take the enforcing loop path: the legacy
+            // one-shot path has no mode concept and would write freely.
+            runAgentLoop(text, mode)
         } else {
             executeRequest(text)
         }
     }
 
     /**
+     * Synchronous mode read for run creation. Never use LiveData.value here:
+     * mode changes are posted asynchronously and would race with send.
+     */
+    private fun readPersistedMode(): AIAgentViewModel.AgentMode {
+        return try {
+            val saved = requireContext()
+                .getSharedPreferences(PREFS_CHAT, Context.MODE_PRIVATE)
+                .getString(KEY_AGENT_MODE, AIAgentViewModel.AgentMode.BUILD.name)
+            runCatching { AIAgentViewModel.AgentMode.valueOf(saved!!) }
+                .getOrDefault(AIAgentViewModel.AgentMode.BUILD)
+        } catch (e: Exception) {
+            AIAgentViewModel.AgentMode.BUILD
+        }
+    }
+
+    private var lastRunId: String? = null
+
+    /**
      * Phase 1 agent-loop entry: drives the controller and maps AgentEvents
      * onto the existing chat UI (working bubble, file activity rows, final
      * text, errors). Legacy executeRequest() below stays the default path.
      */
-    private fun runAgentLoop(userRequest: String) {
+    private fun runAgentLoop(userRequest: String, uiMode: AIAgentViewModel.AgentMode) {
         if (userRootProject.isBlank()) {
             showSnackbar("Project path not set")
             viewModel.setWorking(false)
@@ -462,8 +494,6 @@ class ArtificialFragment(
                 AgentTools.registerAll(requireContext().applicationContext)
                 val controller = agentController
                     ?: AgentController(aiAgent).also { agentController = it }
-                val uiMode = viewModel.agentMode.value
-                    ?: AIAgentViewModel.AgentMode.BUILD
                 val mode = if (uiMode == AIAgentViewModel.AgentMode.PLAN) {
                     RunMode.PLAN
                 } else {
@@ -477,6 +507,10 @@ class ArtificialFragment(
                     onConfirm = { call -> askToolApproval(call) }
                 )
             } catch (e: CancellationException) {
+                android.util.Log.d(
+                    TAG_AGENT,
+                    "TOOL_CANCELLED lastTool=${viewModel.runStatus.value} run=$lastRunId"
+                )
                 viewModel.finalizeWorkingMessage(workingIndex, "Run cancelled.")
             } catch (e: Exception) {
                 viewModel.failWorkingMessage(workingIndex, "❌ Error: ${e.message}")
@@ -489,6 +523,13 @@ class ArtificialFragment(
 
     private fun onAgentEvent(event: AgentEvents, workingIndex: Int) {
         when (event) {
+            is AgentEvents.RunStarted -> {
+                lastRunId = event.runId
+                android.util.Log.d(
+                    TAG_AGENT,
+                    "RUN_CREATED id=${event.runId} mode=${event.mode}"
+                )
+            }
             is AgentEvents.Thinking ->
                 viewModel.updateWorkingMessage(workingIndex, event.status)
             is AgentEvents.ToolsProposed ->
@@ -501,6 +542,10 @@ class ArtificialFragment(
                     "Waiting for approval: ${event.call.name}…"
                 )
             is AgentEvents.ToolStarted -> {
+                android.util.Log.d(
+                    TAG_AGENT,
+                    "TOOL_STARTED id=${event.call.callId} name=${event.call.name} run=$lastRunId"
+                )
                 viewModel.updateWorkingMessage(workingIndex, "Running ${event.call.name}…")
                 viewModel.setRunStatus(event.call.name)
                 (event.call.args["path"] as? String)?.let { path ->
@@ -526,12 +571,28 @@ class ArtificialFragment(
                 }
             }
             is AgentEvents.ModelReply -> { /* thinking continues; nothing to show */ }
-            is AgentEvents.FinalAnswer ->
+            is AgentEvents.FinalAnswer -> {
+                android.util.Log.d(
+                    TAG_AGENT,
+                    "RUN_FINAL_STATE state=DONE run=$lastRunId legacy=${event.legacyModifications}"
+                )
                 viewModel.finalizeWorkingMessage(workingIndex, event.text)
-            is AgentEvents.Failed ->
+            }
+            is AgentEvents.Failed -> {
+                android.util.Log.d(
+                    TAG_AGENT,
+                    "RUN_FINAL_STATE state=FAILED run=$lastRunId reason=${event.reason.take(200)}"
+                )
                 viewModel.failWorkingMessage(workingIndex, event.reason)
-            is AgentEvents.Cancelled ->
+            }
+            is AgentEvents.Cancelled -> {
+                android.util.Log.d(
+                    TAG_AGENT,
+                    "RUN_FINAL_STATE state=CANCELLED run=$lastRunId steps=${event.partialSteps}"
+                )
+                viewModel.setRunStatus(null)
                 viewModel.finalizeWorkingMessage(workingIndex, "Run cancelled.")
+            }
             is AgentEvents.Retrying ->
                 viewModel.updateWorkingMessage(
                     workingIndex,
@@ -689,8 +750,11 @@ class ArtificialFragment(
     }
 
     fun clearConversation() {
+        android.util.Log.d(TAG_AGENT, "RUN_CANCEL_REQUESTED reason=clear-conversation")
+        agentController?.cancelActiveRun()
         executionJob?.cancel()
         viewModel.setWorking(false)
+        viewModel.setRunStatus(null)
         codeCompletionManager?.clearSuggestion()
         lifecycleScope.launch {
             try {
@@ -965,6 +1029,7 @@ class ArtificialFragment(
     }
 
     companion object {
+        private const val TAG_AGENT = "HMXAgent"
         private const val PREFS_CHAT = "ai_chat_prefs"
         private const val KEY_AGENT_MODE = "agent_mode"
         private const val KEY_LOOP_ENABLED = "agent_loop_enabled"

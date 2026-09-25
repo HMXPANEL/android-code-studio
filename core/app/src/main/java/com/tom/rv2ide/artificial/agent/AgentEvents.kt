@@ -19,6 +19,7 @@ package com.tom.rv2ide.artificial.agent
 
 import com.tom.rv2ide.artificial.tools.ToolCall
 import com.tom.rv2ide.artificial.tools.ToolResult
+import com.tom.rv2ide.artificial.tools.RunMode
 
 /**
  * Events emitted by [AgentController]. The UI layer maps these onto the
@@ -27,6 +28,8 @@ import com.tom.rv2ide.artificial.tools.ToolResult
  * failed→onError) plus two additive UI hooks: tool proposals and approvals.
  */
 sealed class AgentEvents {
+
+  data class RunStarted(val runId: String, val mode: RunMode) : AgentEvents()
 
   data class Thinking(val status: String) : AgentEvents()
 

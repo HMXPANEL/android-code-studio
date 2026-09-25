@@ -110,6 +110,15 @@ class BuildProjectTool(
         // Best effort.
       }
       throw kotlinx.coroutines.CancellationException("Build interrupted.")
+    } catch (e: kotlinx.coroutines.CancellationException) {
+      // Structured cancellation (user cancel / run cancel): stop the server
+      // build too, otherwise it keeps running after the run is dead.
+      try {
+        service.cancelCurrentBuild()
+      } catch (cancelError: Exception) {
+        // Best effort.
+      }
+      throw e
     } catch (e: CancellationException) {
       try {
         service.cancelCurrentBuild()

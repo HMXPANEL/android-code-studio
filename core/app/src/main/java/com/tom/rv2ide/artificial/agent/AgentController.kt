@@ -32,6 +32,7 @@ import com.tom.rv2ide.artificial.tools.builtins.BoundedWalk
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
@@ -98,7 +99,7 @@ class AgentController(
   ): AgentRun {
     // Parent the run job to the caller: UI cancellation then cancels the run
     // automatically, while run.cancel() stays local (SupervisorJob).
-    val run = trackRun(AgentRun(mode = mode, parentJob = coroutineContext[Job]))
+    val run = trackRun(AgentRun(mode = mode, parentJob = currentCoroutineContext()[Job]))
     val permission = permissionFor(mode)
     val planMode = mode == RunMode.PLAN
     val snippetParser = SnippetParser()

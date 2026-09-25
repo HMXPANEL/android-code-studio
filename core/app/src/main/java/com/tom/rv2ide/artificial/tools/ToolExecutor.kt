@@ -20,6 +20,7 @@ package com.tom.rv2ide.artificial.tools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -101,7 +102,7 @@ open class ToolExecutor(
         }
       }
     }
-    val ambientJob = coroutineContext[Job]
+    val ambientJob = currentCoroutineContext()[Job]
     val handleAmbient = arm(ambientJob)
     val handleRun = if (ctx.job !== ambientJob) arm(ctx.job) else null
     val raw: ToolResult = try {

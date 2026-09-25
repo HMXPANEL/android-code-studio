@@ -72,6 +72,29 @@ class WriteFileTool(appContext: Context) : Tool {
     }
     return when (val result = writer.writeFile(file.absolutePath, content, true)) {
       is FileWriteResult.Success -> {
+        // Truth rule: a Success return is a claim, not proof. Re-read and
+        // verify the bytes on disk before reporting success.
+        val verified = try {
+          file.readText() == content
+        } catch (e: Exception) {
+          false
+        }
+        if (!verified) {
+          try {
+            if (previous != null) {
+              writer.writeFile(file.absolutePath, previous, false)
+            } else if (file.exists()) {
+              file.delete()
+            }
+          } catch (e: Exception) {
+            // Best-effort cleanup; the failure below is what matters.
+          }
+          ctx.onFileModified?.invoke(file.absolutePath, previous, content, false)
+          return ToolResult.failure(
+              "Write FAILED verification: disk content does not match. " +
+                  "Rolled back to the previous state."
+          )
+        }
         ctx.onFileModified?.invoke(
             file.absolutePath,
             previous,
@@ -162,6 +185,26 @@ class EditFileTool(appContext: Context) : Tool {
       is EditApply.EditOutcome.Applied -> {
         when (val written = writer.writeFile(file.absolutePath, outcome.newContent, true)) {
           is FileWriteResult.Success -> {
+            // Truth rule: verify the replacement block is actually on disk.
+            val verified = try {
+              file.readText().contains(replace)
+            } catch (e: Exception) {
+              false
+            }
+            if (!verified) {
+              val restored = try {
+                writer.writeFile(file.absolutePath, current, false)
+                file.readText() == current
+              } catch (e: Exception) {
+                false
+              }
+              ctx.onFileModified?.invoke(file.absolutePath, current, current, false)
+              return ToolResult.failure(
+                  "Edit FAILED verification: replacement not found on disk." +
+                      if (restored) " Original content restored."
+                      else " ROLLBACK FAILED — check the file!"
+              )
+            }
             ctx.onFileModified?.invoke(file.absolutePath, current, outcome.newContent, true)
             ToolResult.success(
                 "Edited '$pathArg' (${outcome.matchCount} match(es), occurrence applied).",

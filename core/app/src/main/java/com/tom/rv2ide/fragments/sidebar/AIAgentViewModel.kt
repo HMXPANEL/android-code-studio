@@ -44,6 +44,14 @@ class AIAgentViewModel : ViewModel() {
   private val _pendingAttachment = MutableLiveData<String?>(null)
   val pendingAttachment: LiveData<String?> = _pendingAttachment
 
+  /** Current agent-run status line (step/tool), null when idle. */
+  private val _runStatus = MutableLiveData<String?>(null)
+  val runStatus: LiveData<String?> = _runStatus
+
+  fun setRunStatus(status: String?) {
+    _runStatus.postValue(status)
+  }
+
   fun addUserMessage(text: String, attachmentUri: String? = null) {
     val list = _messages.value ?: mutableListOf()
     list.add(ChatMessage(text, true, false, MessageKind.USER, attachmentUri))

@@ -29,13 +29,20 @@ import com.google.android.material.textview.MaterialTextView
 import com.tom.rv2ide.R
 import com.tom.rv2ide.activities.editor.EditorHandlerActivity
 import com.tom.rv2ide.adapters.ChatMessageAdapter
+import com.tom.rv2ide.artificial.agent.AgentController
+import com.tom.rv2ide.artificial.agent.AgentEvents
 import com.tom.rv2ide.artificial.agents.AIAgentManager
 import com.tom.rv2ide.artificial.agents.Agents
+import com.tom.rv2ide.artificial.tools.RunMode
+import com.tom.rv2ide.artificial.tools.ToolCall
+import com.tom.rv2ide.artificial.tools.builtins.AgentTools
 import com.tom.rv2ide.fragments.AIHistoryFragment
 import com.tom.rv2ide.managers.CodeCompletionManager
 import com.tom.rv2ide.ui.CodeEditorView
 import com.tom.rv2ide.utils.EditorSidebarActions
 import com.tom.rv2ide.utils.ProjectHelper.getProjectRoot
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -92,6 +99,18 @@ class ArtificialFragment(
     private var completionStateMonitorJob: Job? = null
     private var lastMonitoredFile: File? = null
     private var isSettingUpCompletion = false
+
+    private var agentController: AgentController? = null
+
+    /** Phase 1 agent loop entry. Default OFF: legacy one-shot path stays default. */
+    private fun isAgentLoopEnabled(): Boolean {
+        return try {
+            requireContext().getSharedPreferences(PREFS_CHAT, Context.MODE_PRIVATE)
+                .getBoolean(KEY_LOOP_ENABLED, false)
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     private var savedContentContainerVisibility = View.GONE
 
@@ -405,7 +424,162 @@ class ArtificialFragment(
         viewModel.setPendingAttachment(null)
         codeCompletionManager?.clearSuggestion()
 
-        executeRequest(text)
+        if (isAgentLoopEnabled()) {
+            runAgentLoop(text)
+        } else {
+            executeRequest(text)
+        }
+    }
+
+    /**
+     * Phase 1 agent-loop entry: drives the controller and maps AgentEvents
+     * onto the existing chat UI (working bubble, file activity rows, final
+     * text, errors). Legacy executeRequest() below stays the default path.
+     */
+    private fun runAgentLoop(userRequest: String) {
+        if (userRootProject.isBlank()) {
+            showSnackbar("Project path not set")
+            viewModel.setWorking(false)
+            sendBtn.isEnabled = true
+            return
+        }
+        executionJob?.cancel()
+        executionJob = lifecycleScope.launch {
+            viewModel.setWorking(true)
+            val workingIndex = viewModel.startWorkingMessage(getString(R.string.ai_chat_working))
+            try {
+                AgentTools.registerAll(requireContext().applicationContext)
+                val controller = agentController
+                    ?: AgentController(aiAgent).also { agentController = it }
+                val uiMode = viewModel.agentMode.value
+                    ?: AIAgentViewModel.AgentMode.BUILD
+                val mode = if (uiMode == AIAgentViewModel.AgentMode.PLAN) {
+                    RunMode.PLAN
+                } else {
+                    RunMode.BUILD
+                }
+                controller.runAgent(
+                    userRequest = userRequest,
+                    mode = mode,
+                    projectRoot = File(userRootProject),
+                    events = { event -> onAgentEvent(event, workingIndex) },
+                    onConfirm = { call -> askToolApproval(call) }
+                )
+            } catch (e: CancellationException) {
+                viewModel.finalizeWorkingMessage(workingIndex, "Run cancelled.")
+            } catch (e: Exception) {
+                viewModel.failWorkingMessage(workingIndex, "❌ Error: ${e.message}")
+            } finally {
+                viewModel.setWorking(false)
+                viewModel.setRunStatus(null)
+            }
+        }
+    }
+
+    private fun onAgentEvent(event: AgentEvents, workingIndex: Int) {
+        when (event) {
+            is AgentEvents.Thinking ->
+                viewModel.updateWorkingMessage(workingIndex, event.status)
+            is AgentEvents.ToolsProposed ->
+                event.calls.firstOrNull()?.let {
+                    viewModel.setRunStatus(it.name)
+                }
+            is AgentEvents.ApprovalRequired ->
+                viewModel.updateWorkingMessage(
+                    workingIndex,
+                    "Waiting for approval: ${event.call.name}…"
+                )
+            is AgentEvents.ToolStarted -> {
+                viewModel.updateWorkingMessage(workingIndex, "Running ${event.call.name}…")
+                viewModel.setRunStatus(event.call.name)
+                (event.call.args["path"] as? String)?.let { path ->
+                    val fileName = try {
+                        File(path).name
+                    } catch (e: Exception) {
+                        path
+                    }
+                    viewModel.addFileActivity(workingIndex, fileName)
+                }
+            }
+            is AgentEvents.ToolFinished -> {
+                (event.call.args["path"] as? String)?.let { path ->
+                    val fileName = try {
+                        File(path).name
+                    } catch (e: Exception) {
+                        path
+                    }
+                    viewModel.updateFileActivity(workingIndex, fileName, event.result.ok)
+                }
+                if (event.result.ok) {
+                    maybeOpenModifiedFile(event.call)
+                }
+            }
+            is AgentEvents.ModelReply -> { /* thinking continues; nothing to show */ }
+            is AgentEvents.FinalAnswer ->
+                viewModel.finalizeWorkingMessage(workingIndex, event.text)
+            is AgentEvents.Failed ->
+                viewModel.failWorkingMessage(workingIndex, event.reason)
+            is AgentEvents.Cancelled ->
+                viewModel.finalizeWorkingMessage(workingIndex, "Run cancelled.")
+            is AgentEvents.Retrying ->
+                viewModel.updateWorkingMessage(
+                    workingIndex,
+                    "🔄 Retry #${event.attempt}: ${event.message}"
+                )
+        }
+    }
+
+    private fun maybeOpenModifiedFile(call: ToolCall) {
+        val path = call.args["path"] as? String ?: return
+        if (!call.name.endsWith("write_file") && !call.name.endsWith("edit_file")) return
+        lifecycleScope.launch {
+            try {
+                val root = File(userRootProject)
+                val file = if (File(path).isAbsolute) {
+                    File(path)
+                } else {
+                    File(root, path)
+                }
+                if (file.exists() && file.isFile) {
+                    openFileInEditor(file.name)
+                    refreshCurrentEditor()
+                }
+            } catch (e: Exception) {
+                // Best effort only.
+            }
+        }
+    }
+
+    private suspend fun askToolApproval(call: ToolCall): Boolean {
+        val answer = CompletableDeferred<Boolean>()
+        val argsSummary = call.args.entries.joinToString("\n") { (k, v) ->
+            val rendered = v.toString().take(300)
+            "$k: $rendered"
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+            .setTitle("Allow tool '${call.name}'?")
+            .setMessage(argsSummary.ifBlank { "No arguments." })
+            .setPositiveButton("Allow") { _, _ ->
+                if (!answer.complete(true)) {
+                    answer.cancel()
+                }
+            }
+            .setNegativeButton("Deny") { _, _ ->
+                if (!answer.complete(false)) {
+                    answer.cancel()
+                }
+            }
+            .setOnCancelListener {
+                answer.cancel()
+            }
+            .show()
+        return try {
+            answer.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun executeRequest(userRequest: String) {
@@ -782,6 +956,7 @@ class ArtificialFragment(
     companion object {
         private const val PREFS_CHAT = "ai_chat_prefs"
         private const val KEY_AGENT_MODE = "agent_mode"
+        private const val KEY_LOOP_ENABLED = "agent_loop_enabled"
         private const val KEY_CONTENT_VISIBILITY = "content_visibility"
         private const val MENU_HISTORY = 1
         private const val MENU_SETTINGS = 2

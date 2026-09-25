@@ -18,11 +18,18 @@
 package com.tom.rv2ide.artificial.tools
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/**
+ * Thrown only by [ToolExecutor]'s own timeout timer. Because it is a distinct
+ * type, genuine timeouts can never be confused with external cancellation
+ * (unlike sharing one exception type for both, which once swallowed a real
+ * cancel in tests).
+ */
+internal class ToolTimeoutException(message: String) : CancellationException(message)
 
 /**
  * Single chokepoint for every tool execution:
@@ -102,7 +109,7 @@ open class ToolExecutor(
         val timer = launch {
           delay(tool.timeoutSec * 1000L)
           runner.cancel(
-              TimeoutCancellationException(
+              ToolTimeoutException(
                   "Tool '${tool.id}' timed out after ${tool.timeoutSec}s and was stopped."
               )
           )
@@ -113,7 +120,7 @@ open class ToolExecutor(
           timer.cancel()
         }
       }
-    } catch (e: TimeoutCancellationException) {
+    } catch (e: ToolTimeoutException) {
       return ToolResult.failure(
           e.message ?: "Tool '${tool.id}' timed out after ${tool.timeoutSec}s and was stopped."
       )

@@ -217,6 +217,9 @@ dependencies {
   kapt(libs.google.auto.service)
   kapt(projects.annotation.processors)
 
+  // Unit tests (JVM-only; Android-free test doubles only)
+  testImplementation(libs.tests.junit)
+
   implementation(libs.common.editor)
   implementation(libs.common.utilcode)
   implementation(libs.common.glide)

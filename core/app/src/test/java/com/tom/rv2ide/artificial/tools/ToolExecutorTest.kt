@@ -189,24 +189,30 @@ class ToolExecutorTest {
     assertTrue(result.text.contains("truncated"))
   }
 
-  @Test(expected = CancellationException::class)
-  fun `cancellation propagates`() = runBlocking {
-    ToolRegistry.register(
-        tool("local:wait") { _, _ ->
-          delay(30_000L)
-          ToolResult.success("never")
-        }
-    )
-    val job = launch {
-      exec.execute(
-          ToolCall("local:wait", mapOf("path" to "x"), "c", "r"),
-          ctx(), ToolPermission.buildDefault(false)
-      ) { true }
+  @Test
+  fun `cancellation propagates`() {
+    var sawCancel = false
+    runBlocking {
+      ToolRegistry.register(
+          tool("local:wait") { _, _ ->
+            delay(30_000L)
+            ToolResult.success("never")
+          }
+      )
+      val job = launch {
+        exec.execute(
+            ToolCall("local:wait", mapOf("path" to "x"), "c", "r"),
+            ctx(), ToolPermission.buildDefault(false)
+        ) { true }
+      }
+      delay(50)
+      job.cancel()
+      try {
+        job.join()
+      } catch (e: CancellationException) {
+        sawCancel = true
+      }
     }
-    delay(50)
-    job.cancel()
-    job.join()
-    // If cancellation did not propagate, fail explicitly.
-    throw AssertionError("expected CancellationException")
+    assertTrue("expected CancellationException from cancelled run", sawCancel)
   }
 }

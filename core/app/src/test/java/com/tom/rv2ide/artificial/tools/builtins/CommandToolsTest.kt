@@ -81,7 +81,7 @@ class CommandGateTest {
     try {
       val ctx = ToolContext(root, false, "t", Job(), 0)
       val result = RunCommandTool().execute(
-          mapOf("command" to "i=1; while [ $i -le 150 ]; do echo line$i; i=$((i+1)); done"),
+          mapOf("command" to "i=1; while [ \$i -le 150 ]; do echo line\$i; i=$((i+1)); done"),
           ctx
       )
       assertTrue(result.ok)

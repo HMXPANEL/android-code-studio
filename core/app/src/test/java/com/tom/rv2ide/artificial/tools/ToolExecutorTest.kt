@@ -207,7 +207,7 @@ class ToolExecutorTest {
 
   @Test
   fun `cancellation propagates`() {
-    var sawCancel = false
+    var outcome = "unset"
     runBlocking {
       ToolRegistry.register(
           tool("local:wait") { _, _ ->
@@ -216,19 +216,25 @@ class ToolExecutorTest {
           }
       )
       val job = launch {
-        exec.execute(
-            ToolCall("local:wait", mapOf("path" to "x"), "c", "r"),
-            ctx(), ToolPermission.buildDefault(false)
-        ) { true }
+        try {
+          val r = exec.execute(
+              ToolCall("local:wait", mapOf("path" to "x"), "c", "r"),
+              ctx(), ToolPermission.buildDefault(false)
+          ) { true }
+          outcome = "result ok=${r.ok} err=${r.error}"
+        } catch (e: Throwable) {
+          outcome = "threw ${e::class.java.name}: ${e.message}"
+        }
       }
       delay(50)
       job.cancel()
       try {
         job.join()
+        outcome += " | join clean"
       } catch (e: CancellationException) {
-        sawCancel = true
+        outcome += " | join threw CancellationException"
       }
     }
-    assertTrue("expected CancellationException from cancelled run", sawCancel)
+    assertTrue("diagnostic outcome: $outcome", outcome.contains("join threw"))
   }
 }

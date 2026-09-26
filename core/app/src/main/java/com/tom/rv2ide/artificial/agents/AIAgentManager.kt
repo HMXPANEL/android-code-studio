@@ -25,10 +25,12 @@ import com.tom.rv2ide.artificial.agents.grok.Grok
 import com.tom.rv2ide.artificial.agents.deepseek.DeepSeek
 import com.tom.rv2ide.artificial.agents.local.LocalLLM
 import com.tom.rv2ide.artificial.file.FileWriteResult
+import com.tom.rv2ide.artificial.file.AIFileWriter
 import com.tom.rv2ide.artificial.parser.SnippetParser
 import com.tom.rv2ide.artificial.permissions.AIPermissionManager
 import com.tom.rv2ide.artificial.project.awareness.ProjectData
 import com.tom.rv2ide.artificial.secrets.ApiKey
+import com.tom.rv2ide.artificial.tools.WriteVerification
 import java.io.File
 import kotlinx.coroutines.delay
 import com.tom.rv2ide.artificial.dialogs.ProviderSwitchDialog
@@ -293,6 +295,7 @@ class AIAgentManager(private val context: Context) {
     ): List<BaseFileModification> {
         val modifications = mutableListOf<BaseFileModification>()
         val parser = SnippetParser()
+        val legacyWriter = AIFileWriter(context)
 
         if (response.contains("FILE_TO_MODIFY:")) {
             val lines = response.lines()
@@ -310,10 +313,22 @@ class AIAgentManager(private val context: Context) {
                         val cleanedContent = parser.cleanFileContent(rawContent)
                         val previousContent = previousFileStates[currentFile]
 
-                        val writeResult = currentAgent?.writeFile(currentFile, cleanedContent)
-                            ?: FileWriteResult.Error("No agent initialized")
+                        val file = File(currentFile)
+                        val toolResult = WriteVerification.writeAndVerify(
+                            writer = legacyWriter,
+                            file = file,
+                            content = cleanedContent,
+                            previous = previousContent,
+                            createBackup = true
+                        )
 
-                        val success = writeResult is FileWriteResult.Success
+                        val success = toolResult.ok
+                        // Convert ToolResult back to FileWriteResult for backward compatibility
+                        val writeResult = when {
+                            toolResult.ok -> FileWriteResult.Success(file.absolutePath, backupCreated = true)
+                            toolResult.error?.contains("refused") == true -> FileWriteResult.PermissionDenied(toolResult.error!!)
+                            else -> FileWriteResult.Error(toolResult.error ?: "Unknown error")
+                        }
                         currentAgent?.recordModification(currentFile, previousContent, cleanedContent, success)
 
                         callback.onFileModified(currentFile, fileName, success)
@@ -338,10 +353,21 @@ class AIAgentManager(private val context: Context) {
                 val cleanedContent = parser.cleanFileContent(rawContent)
                 val previousContent = previousFileStates[currentFile]
 
-                val writeResult = currentAgent?.writeFile(currentFile, cleanedContent)
-                    ?: FileWriteResult.Error("No agent initialized")
+                val file = File(currentFile)
+                val toolResult = WriteVerification.writeAndVerify(
+                    writer = legacyWriter,
+                    file = file,
+                    content = cleanedContent,
+                    previous = previousContent,
+                    createBackup = true
+                )
 
-                val success = writeResult is FileWriteResult.Success
+                val success = toolResult.ok
+                val writeResult = when {
+                    toolResult.ok -> FileWriteResult.Success(file.absolutePath, backupCreated = true)
+                    toolResult.error?.contains("refused") == true -> FileWriteResult.PermissionDenied(toolResult.error!!)
+                    else -> FileWriteResult.Error(toolResult.error ?: "Unknown error")
+                }
                 currentAgent?.recordModification(currentFile, previousContent, cleanedContent, success)
 
                 callback.onFileModified(currentFile, fileName, success)

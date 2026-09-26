@@ -18,6 +18,7 @@
 package com.tom.rv2ide.artificial.agent
 
 import com.tom.rv2ide.artificial.agents.AIAgentManager
+import com.tom.rv2ide.artificial.agent.RunCheckpoint
 import com.tom.rv2ide.artificial.parser.SnippetParser
 import com.tom.rv2ide.artificial.tools.ConfirmPolicy
 import com.tom.rv2ide.artificial.tools.RunMode
@@ -47,6 +48,7 @@ import kotlinx.coroutines.withContext
  */
 class AgentController(
     private val manager: AIAgentManager,
+    private val providerCall: ProviderCall = ProviderCallImpl(manager),
     private val registry: ToolRegistry = ToolRegistry,
     private val executor: ToolExecutor = ToolExecutor(),
     private val callSource: ToolCallSource = TextProtocolSource(),
@@ -121,15 +123,10 @@ class AgentController(
         )
         events(AgentEvents.Thinking("Thinking (step ${run.stepCount + 1})…"))
 
-        val agent = manager.getCurrentAgent()
-        if (agent == null) {
-          return failRun(run, events, "No AI provider is configured. Set an API key first.")
-        }
         val reply: String = try {
           withContext(run.job) {
-            agent.generateCode(
+            providerCall.generateCode(
                 prompt = prompt,
-                context = null,
                 language = "kotlin",
                 projectStructure = null
             )
@@ -208,6 +205,7 @@ class AgentController(
           run.transitionTo(AgentState.FINALIZING)
           run.addEntry(EntryRole.FINAL, reply.take(MAX_FINAL_CHARS))
           events(AgentEvents.FinalAnswer(reply, parsed.hasLegacyModifications))
+          run.checkpoint?.release()
           run.transitionTo(AgentState.DONE)
           clearRun(run)
           return run
@@ -229,6 +227,8 @@ class AgentController(
         if (verdict == LoopAction.STOP) return run
       }
     } catch (e: CancellationException) {
+      // Restore Git checkpoint if one was created
+      run.checkpoint?.restore()
       run.transitionTo(AgentState.CANCELLED)
       events(AgentEvents.Cancelled(run.stepCount))
       clearRun(run)
@@ -273,6 +273,7 @@ class AgentController(
             "Partial progress is preserved above; try a smaller request."
         run.addEntry(EntryRole.FINAL, text)
         events(AgentEvents.FinalAnswer(text, false))
+        run.checkpoint?.release()
         run.transitionTo(AgentState.DONE)
         clearRun(run)
         return LoopAction.STOP
@@ -283,6 +284,7 @@ class AgentController(
             "${run.budget.doomRepeat} times. Please rephrase or narrow the request."
         run.addEntry(EntryRole.FINAL, text)
         events(AgentEvents.FinalAnswer(text, false))
+        run.checkpoint?.release()
         run.transitionTo(AgentState.DONE)
         clearRun(run)
         return LoopAction.STOP
@@ -312,6 +314,14 @@ class AgentController(
         onFileModified = { path, previous, new, success ->
           if (success) {
             run.trackChange(path)
+            // Create Git checkpoint on first successful write
+            if (run.checkpoint == null) {
+              val cp = RunCheckpoint.createIfPossible(projectRoot, run.runId)
+              if (cp != null) {
+                cp.ensureCheckpoint()
+                run.setCheckpoint(cp)
+              }
+            }
             try {
               manager.getCurrentAgent()?.recordModification(path, previous, new, true)
             } catch (e: Exception) {
@@ -391,6 +401,8 @@ class AgentController(
         (run.changedFiles.ifEmpty { listOf("none") }.joinToString(", "))
     run.addEntry(EntryRole.FINAL, text)
     events(AgentEvents.FinalAnswer(text, false))
+    // Don't restore on failure nudge - user may want to keep partial changes
+    run.checkpoint?.release()
     run.transitionTo(AgentState.DONE)
     clearRun(run)
     return true
@@ -429,6 +441,8 @@ class AgentController(
       events: (AgentEvents) -> Unit,
       reason: String
   ): AgentRun {
+    // Restore Git checkpoint if one was created
+    run.checkpoint?.restore()
     run.transitionTo(AgentState.FINALIZING)
     run.addEntry(EntryRole.FINAL, reason)
     events(

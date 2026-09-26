@@ -33,6 +33,7 @@ import com.tom.rv2ide.artificial.agent.AgentController
 import com.tom.rv2ide.artificial.agent.AgentEvents
 import com.tom.rv2ide.artificial.agents.AIAgentManager
 import com.tom.rv2ide.artificial.agents.Agents
+import com.tom.rv2ide.artificial.dialogs.AIPermissionDialog
 import com.tom.rv2ide.artificial.tools.RunMode
 import com.tom.rv2ide.artificial.tools.ToolCall
 import com.tom.rv2ide.artificial.tools.builtins.AgentTools
@@ -44,7 +45,6 @@ import com.tom.rv2ide.utils.ProjectHelper.getProjectRoot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -624,6 +624,63 @@ class ArtificialFragment(
 
     private suspend fun askToolApproval(call: ToolCall): Boolean {
         val answer = CompletableDeferred<Boolean>()
+
+        // For write/edit tools with a path, show diff preview if we can read the file
+        val isWriteTool = call.name == "local:write_file" || call.name == "local:edit_file"
+        val filePath = call.args["path"] as? String
+
+        if (isWriteTool && filePath != null) {
+            val projectRoot = getProjectRoot(requireContext())
+            val file = File(projectRoot, filePath)
+            val oldContent = if (file.exists() && file.isFile) {
+                try {
+                    file.readText()
+                } catch (e: Exception) {
+                    null
+                }
+            } else {
+                null // New file
+            }
+
+            val newContent = when {
+                call.name == "local:write_file" -> call.args["content"] as? String
+                call.name == "local:edit_file" -> {
+                    // For edit_file, we can't easily compute the result without executing
+                    // Show the search/replace as a preview
+                    val search = call.args["search"] as? String ?: ""
+                    val replace = call.args["replace"] as? String ?: ""
+                    "SEARCH:\n$search\n\nREPLACE:\n$replace"
+                }
+                else -> null
+            }
+
+            if (newContent != null) {
+                AIPermissionDialog(requireContext()).showFileWriteConfirmationWithDiff(
+                    filePath = filePath,
+                    oldContent = oldContent,
+                    newContent = newContent,
+                    onConfirm = {
+                        if (!answer.complete(true)) {
+                            answer.cancel()
+                        }
+                    },
+                    onDeny = {
+                        if (!answer.complete(false)) {
+                            answer.cancel()
+                        }
+                    }
+                )
+                return try {
+                    answer.await()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    false
+                }
+            }
+        }
+
+        // Fallback to simple args summary for other tools
         val argsSummary = call.args.entries.joinToString("\n") { (k, v) ->
             val rendered = v.toString().take(300)
             "$k: $rendered"

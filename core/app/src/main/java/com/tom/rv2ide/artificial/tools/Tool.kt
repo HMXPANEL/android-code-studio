@@ -119,7 +119,9 @@ data class ToolCall(
     val name: String,
     val args: Map<String, Any?>,
     val callId: String,
+    /** Run ID for attribution; reserved for subagent/background run tracking (Phase 6+). */
     val runId: String,
+    /** True if converted from legacy FILE_TO_MODIFY format; reserved for migration. */
     val legacy: Boolean = false
 ) {
   /** Fingerprint used by the doom-loop guard (same tool + same args). */
@@ -144,13 +146,16 @@ data class ToolCall(
 /** Single tool contract. Implementations wrap exactly one existing backend. */
 interface Tool {
   val id: String
+  /** Namespace prefix (e.g., "local", "mcp", "skill"). Reserved for future MCP/Skills. */
   val namespace: String
   val description: String
   val schema: ToolSchema
   val kind: ToolKind
+  /** True for read-only tools; enables future parallel dispatch. Reserved for Phase 3+. */
   val readOnlyHint: Boolean
   val timeoutSec: Long
   val confirmPolicy: ConfirmPolicy
+  /** Visibility in tool listings; HIDDEN reserved for deferred/lazy loading. */
   val visible: Boolean
 
   suspend fun execute(args: Map<String, Any?>, ctx: ToolContext): ToolResult

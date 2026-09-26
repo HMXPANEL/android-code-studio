@@ -30,6 +30,7 @@ import com.tom.rv2ide.artificial.tools.ToolKind
 import com.tom.rv2ide.artificial.tools.ToolResult
 import com.tom.rv2ide.artificial.tools.ToolSchema
 import com.tom.rv2ide.artificial.tools.ToolVisibility
+import com.tom.rv2ide.artificial.tools.WriteVerification
 import java.io.File
 
 /** local:write_file — full-file create/overwrite via AIFileWriter (backup kept). */
@@ -70,51 +71,7 @@ class WriteFileTool(appContext: Context) : Tool {
     } catch (e: Exception) {
       return ToolResult.failure("Could not read existing file '$pathArg': ${e.message}")
     }
-    return when (val result = writer.writeFile(file.absolutePath, content, true)) {
-      is FileWriteResult.Success -> {
-        // Truth rule: a Success return is a claim, not proof. Re-read and
-        // verify the bytes on disk before reporting success.
-        val verified = try {
-          file.readText() == content
-        } catch (e: Exception) {
-          false
-        }
-        if (!verified) {
-          try {
-            if (previous != null) {
-              writer.writeFile(file.absolutePath, previous, false)
-            } else if (file.exists()) {
-              file.delete()
-            }
-          } catch (e: Exception) {
-            // Best-effort cleanup; the failure below is what matters.
-          }
-          ctx.onFileModified?.invoke(file.absolutePath, previous, content, false)
-          return ToolResult.failure(
-              "Write FAILED verification: disk content does not match. " +
-                  "Rolled back to the previous state."
-          )
-        }
-        ctx.onFileModified?.invoke(
-            file.absolutePath,
-            previous,
-            content,
-            true
-        )
-        ToolResult.success(
-            if (previous == null) {
-              "Created '$pathArg' (${content.length} chars)."
-            } else {
-              "Overwrote '$pathArg' (${content.length} chars, backup kept: ${result.backupCreated})."
-            },
-            stats = mapOf("path" to pathArg, "new" to (previous == null).toString())
-        )
-      }
-      is FileWriteResult.PermissionDenied ->
-        ToolResult.failure("Write refused: ${result.reason}")
-      is FileWriteResult.Error ->
-        ToolResult.failure("Write failed: ${result.message}")
-    }
+    return WriteVerification.writeAndVerify(writer, file, content, previous, true)
   }
 }
 
@@ -183,7 +140,8 @@ class EditFileTool(appContext: Context) : Tool {
       is EditApply.EditOutcome.Rejected ->
         ToolResult.failure("Edit refused: ${outcome.reason}")
       is EditApply.EditOutcome.Applied -> {
-        when (val written = writer.writeFile(file.absolutePath, outcome.newContent, true)) {
+        val writeResult = writer.writeFile(file.absolutePath, outcome.newContent, true)
+        when (writeResult) {
           is FileWriteResult.Success -> {
             // Truth rule: verify the replacement block is actually on disk.
             val verified = try {
@@ -192,12 +150,7 @@ class EditFileTool(appContext: Context) : Tool {
               false
             }
             if (!verified) {
-              val restored = try {
-                writer.writeFile(file.absolutePath, current, false)
-                file.readText() == current
-              } catch (e: Exception) {
-                false
-              }
+              val restored = WriteVerification.restoreToPrevious(writer, file, current)
               ctx.onFileModified?.invoke(file.absolutePath, current, current, false)
               return ToolResult.failure(
                   "Edit FAILED verification: replacement not found on disk." +
@@ -213,16 +166,11 @@ class EditFileTool(appContext: Context) : Tool {
           }
           else -> {
             // Roll back to the pre-edit content; report both outcomes.
-            val rolledBack = try {
-              writer.writeFile(file.absolutePath, current, false)
-              file.readText() == current
-            } catch (e: Exception) {
-              false
-            }
-            val detail = if (written is FileWriteResult.PermissionDenied) {
-              written.reason
+            val rolledBack = WriteVerification.restoreToPrevious(writer, file, current)
+            val detail = if (writeResult is FileWriteResult.PermissionDenied) {
+              writeResult.reason
             } else {
-              (written as? FileWriteResult.Error)?.message ?: "unknown error"
+              (writeResult as? FileWriteResult.Error)?.message ?: "unknown error"
             }
             ctx.onFileModified?.invoke(file.absolutePath, current, current, false)
             ToolResult.failure(

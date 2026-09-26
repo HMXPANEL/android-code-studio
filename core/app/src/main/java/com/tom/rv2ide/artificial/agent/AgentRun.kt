@@ -72,10 +72,18 @@ class AgentRun(
   /** Absolute paths changed by successful write/edit/delete steps this run. */
   val changedFiles = mutableListOf<String>()
 
+  /** Git checkpoint created on first write (if project is a Git repo). */
+  var checkpoint: RunCheckpoint? = null
+    private set
+
   fun trackChange(path: String) {
     if (!changedFiles.contains(path)) {
       changedFiles.add(path)
     }
+  }
+
+  fun setCheckpoint(cp: RunCheckpoint) {
+    checkpoint = cp
   }
 
   val startedAt: Long = System.currentTimeMillis()

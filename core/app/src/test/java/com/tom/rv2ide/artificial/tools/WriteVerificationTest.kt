@@ -17,7 +17,7 @@ class WriteVerificationTest {
     private fun testDir(): File = Files.createTempDirectory("wv-test").toFile()
 
     /** Fake writer that performs a real file write. */
-    private fun realWrite(): WriteVerification.WriteFn = { path, content, _ ->
+    private fun realWrite(): WriteFn = { path, content, _ ->
         try {
             File(path).apply { parentFile?.mkdirs() }.writeText(content)
             FileWriteResult.Success(path, backupCreated = false)
@@ -27,17 +27,17 @@ class WriteVerificationTest {
     }
 
     /** Fake writer that claims success but writes nothing (simulates lost write). */
-    private fun lyingWrite(): WriteVerification.WriteFn = { path, _, _ ->
+    private fun lyingWrite(): WriteFn = { path, _, _ ->
         FileWriteResult.Success(path, backupCreated = false)
     }
 
     /** Fake writer that always fails. */
-    private fun failingWrite(): WriteVerification.WriteFn = { _, _, _ ->
+    private fun failingWrite(): WriteFn = { _, _, _ ->
         FileWriteResult.Error("Simulated write failure")
     }
 
     /** Fake writer that denies. */
-    private fun denyingWrite(): WriteVerification.WriteFn = { _, _, _ ->
+    private fun denyingWrite(): WriteFn = { _, _, _ ->
         FileWriteResult.PermissionDenied("Simulated denial")
     }
 

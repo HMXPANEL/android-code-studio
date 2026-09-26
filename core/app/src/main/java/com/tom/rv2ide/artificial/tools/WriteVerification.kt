@@ -20,6 +20,9 @@ package com.tom.rv2ide.artificial.tools
 import com.tom.rv2ide.artificial.file.FileWriteResult
 import java.io.File
 
+/** Backend write function: (absolutePath, content, createBackup) -> result. */
+typealias WriteFn = (String, String, Boolean) -> FileWriteResult
+
 /**
  * Shared post-write verification utility.
  *
@@ -33,9 +36,6 @@ import java.io.File
  * (permission checks + backups), tests pass fakes.
  */
 object WriteVerification {
-
-    /** Backend write function: (absolutePath, content, createBackup) -> result. */
-    typealias WriteFn = (String, String, Boolean) -> FileWriteResult
 
     /**
      * Writes content via [write], then verifies the on-disk content matches

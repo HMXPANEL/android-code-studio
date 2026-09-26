@@ -58,8 +58,8 @@ interface ProviderCall {
 class ProviderCallImpl(private val manager: AIAgentManager) : ProviderCall {
     override suspend fun generateCode(
         prompt: String,
-        language: String = "kotlin",
-        projectStructure: String? = null
+        language: String,
+        projectStructure: String?
     ): Result<String> {
         val agent = manager.getCurrentAgent()
         return if (agent != null) {

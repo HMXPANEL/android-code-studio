@@ -18,13 +18,12 @@
 package com.tom.rv2ide.artificial.dialogs
 
 import android.content.Context
+import android.text.Html
 import android.text.method.ScrollingMovementMethod
 import android.view.LayoutInflater
-import android.view.View
 import android.widget.CheckBox
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.core.text.htmlFromHtml
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.tom.rv2ide.R
 import com.tom.rv2ide.artificial.permissions.AIPermissionManager
@@ -41,7 +40,7 @@ class AIPermissionDialog(private val context: Context) {
      * Maximum lines of diff to show in the preview dialog.
      * Keeps memory/rendering bounded on low-RAM devices.
      */
-    private const val MAX_DIFF_LINES = 80
+    private val maxDiffLines = 80
 
     fun showFileWriteConfirmation(
         fileName: String,
@@ -88,7 +87,7 @@ class AIPermissionDialog(private val context: Context) {
 
         val scrollView = ScrollView(context)
         val textView = TextView(context).apply {
-            text = diffText
+            text = Html.fromHtml(diffText, Html.FROM_HTML_MODE_LEGACY)
             movementMethod = ScrollingMovementMethod()
             setTextIsSelectable(true)
             textSize = 12f
@@ -119,19 +118,19 @@ class AIPermissionDialog(private val context: Context) {
 
     /**
      * Builds a bounded unified diff between old and new content.
-     * Limited to MAX_DIFF_LINES to prevent OOM on large files.
+     * Limited to maxDiffLines to prevent OOM on large files.
      */
     private fun buildBoundedDiff(filePath: String, oldContent: String?, newContent: String): String {
         val fileName = java.io.File(filePath).name
         val builder = StringBuilder()
-        builder.append("<b>File:</b> $fileName<br/><br/>")
+        builder.append("<b>File:</b> ${escapeHtml(fileName)}<br/><br/>")
 
         if (oldContent == null) {
             // New file - show first N lines of new content
-            builder.append("<b>New file (first ${MAX_DIFF_LINES} lines):</b><br/>")
-            val lines = newContent.lines().take(MAX_DIFF_LINES).toList()
+            builder.append("<b>New file (first ${maxDiffLines} lines):</b><br/>")
+            val lines = newContent.lines().take(maxDiffLines).toList()
             builder.append(escapeHtml(lines.joinToString("\n")))
-            if (newContent.count { it == '\n' } >= MAX_DIFF_LINES) {
+            if (newContent.count { it == '\n' } >= maxDiffLines) {
                 builder.append("<br/><br/><i>... truncated (${newContent.lines().size} total lines)</i>")
             }
             return builder.toString()
@@ -146,8 +145,8 @@ class AIPermissionDialog(private val context: Context) {
         builder.append("<b>Changes:</b><br/>")
         var lineCount = 0
         for (change in diff) {
-            if (lineCount >= MAX_DIFF_LINES) {
-                builder.append("<br/><i>... diff truncated (showing first $MAX_DIFF_LINES lines)</i>")
+            if (lineCount >= maxDiffLines) {
+                builder.append("<br/><i>... diff truncated (showing first $maxDiffLines lines)</i>")
                 break
             }
             when (change.type) {
@@ -173,7 +172,7 @@ class AIPermissionDialog(private val context: Context) {
 
     /**
      * Simple O(N*M) diff for small files. For large files this is bounded by
-     * MAX_DIFF_LINES anyway, so performance is acceptable.
+     * maxDiffLines anyway, so performance is acceptable.
      */
     private fun computeSimpleDiff(oldLines: List<String>, newLines: List<String>): List<DiffLine> {
         val result = mutableListOf<DiffLine>()
@@ -204,11 +203,11 @@ class AIPermissionDialog(private val context: Context) {
 
     private fun escapeHtml(text: String): String {
         return text
-            .replace("&", "&")
-            .replace("<", "<")
-            .replace(">", ">")
-            .replace("\"", """)
-            .replace("'", "'")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&#39;")
     }
 
     fun showPermissionSettings(onSettingsChanged: () -> Unit) {

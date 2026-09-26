@@ -17,7 +17,6 @@
 
 package com.tom.rv2ide.artificial.tools
 
-import com.tom.rv2ide.artificial.file.AIFileWriter
 import com.tom.rv2ide.artificial.file.FileWriteResult
 import java.io.File
 
@@ -28,29 +27,35 @@ import java.io.File
  * FILE_TO_MODIFY path must verify that bytes on disk match the intended
  * content before reporting success. This class centralizes that logic
  * so there is a single source of truth for "what does verified mean".
+ *
+ * The writer is injected as a plain lambda so this object stays
+ * Android-free and JVM-testable: production passes `writer::writeFile`
+ * (permission checks + backups), tests pass fakes.
  */
 object WriteVerification {
 
+    /** Backend write function: (absolutePath, content, createBackup) -> result. */
+    typealias WriteFn = (String, String, Boolean) -> FileWriteResult
+
     /**
-     * Writes content to a file using AIFileWriter, then verifies the
-     * on-disk content matches exactly. On verification failure, attempts
-     * to roll back to the previous content.
+     * Writes content via [write], then verifies the on-disk content matches
+     * exactly. On verification failure, attempts to roll back to [previous].
      *
-     * @param writer the AIFileWriter instance
      * @param file the target file
      * @param content the new content to write
      * @param previous the previous content (null if file was new), used for rollback
-     * @param createBackup whether to create a backup before writing
-     * @return ToolResult indicating success with verified message, or failure with rollback status
+     * @param write the backend write function (e.g. `AIFileWriter::writeFile`)
+     * @param createBackup whether to request a backup before writing
+     * @return ToolResult indicating verified success, or failure with rollback status
      */
     fun writeAndVerify(
-        writer: AIFileWriter,
         file: File,
         content: String,
         previous: String?,
+        write: WriteFn,
         createBackup: Boolean = true
     ): ToolResult {
-        val writeResult = writer.writeFile(file.absolutePath, content, createBackup)
+        val writeResult = write(file.absolutePath, content, createBackup)
         return when (writeResult) {
             is FileWriteResult.Success -> {
                 val verified = try {
@@ -59,20 +64,7 @@ object WriteVerification {
                     false
                 }
                 if (!verified) {
-                    // Rollback attempt
-                    val rolledBack = try {
-                        if (previous != null) {
-                            writer.writeFile(file.absolutePath, previous, false)
-                            file.readText() == previous
-                        } else if (file.exists()) {
-                            file.delete()
-                            !file.exists()
-                        } else {
-                            true
-                        }
-                    } catch (e: Exception) {
-                        false
-                    }
+                    val rolledBack = restoreToPrevious(file, previous, write)
                     return ToolResult.failure(
                         "Write FAILED verification: disk content does not match. " +
                             if (rolledBack) " Rolled back to previous state."
@@ -114,19 +106,19 @@ object WriteVerification {
     /**
      * Attempts to restore a file to a previous state.
      *
-     * @param writer the AIFileWriter instance
      * @param file the target file
      * @param previous the content to restore (null means delete the file)
+     * @param write the backend write function
      * @return true if restoration succeeded and content matches
      */
     fun restoreToPrevious(
-        writer: AIFileWriter,
         file: File,
-        previous: String?
+        previous: String?,
+        write: WriteFn
     ): Boolean {
         return try {
             if (previous != null) {
-                val result = writer.writeFile(file.absolutePath, previous, false)
+                val result = write(file.absolutePath, previous, false)
                 result is FileWriteResult.Success && file.readText() == previous
             } else if (file.exists()) {
                 file.delete()

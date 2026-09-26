@@ -45,6 +45,7 @@ import com.tom.rv2ide.utils.ProjectHelper.getProjectRoot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -630,7 +631,7 @@ class ArtificialFragment(
         val filePath = call.args["path"] as? String
 
         if (isWriteTool && filePath != null) {
-            val projectRoot = getProjectRoot(requireContext())
+            val projectRoot = getProjectRoot()
             val file = File(projectRoot, filePath)
             val oldContent = if (file.exists() && file.isFile) {
                 try {

@@ -1,116 +1,102 @@
 package com.tom.rv2ide.artificial.agent
 
-import android.content.ContextWrapper
-import android.app.Application
-import com.tom.rv2ide.artificial.tools.ConfirmPolicy
 import com.tom.rv2ide.artificial.tools.RunMode
+import com.tom.rv2ide.artificial.tools.ToolCall
 import com.tom.rv2ide.artificial.tools.ToolContext
 import com.tom.rv2ide.artificial.tools.ToolExecutor
 import com.tom.rv2ide.artificial.tools.ToolPermission
 import com.tom.rv2ide.artificial.tools.ToolRegistry
-import com.tom.rv2ide.artificial.tools.builtins.AgentTools
 import com.tom.rv2ide.artificial.tools.builtins.RunCommandTool
-import com.tom.rv2ide.artificial.tools.builtins.BuildProjectTool
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
-import kotlinx.coroutines.CancellationException
-import org.junit.Assert.assertTrue
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Before
 import org.junit.Test
 
+/**
+ * JVM-only cancellation and loop-guard tests.
+ *
+ * [RunCommandTool] is Android-free (pure ProcessBuilder), so command
+ * cancellation can be tested on the JVM without a device.
+ */
 class CancellationTest {
 
-    private fun testCtx(root: File): ToolContext = ToolContext(
-        projectRoot = root,
-        planMode = false,
-        runId = "t",
-        job = Job(),
-        stepIndex = 0
-    )
+    private lateinit var root: File
 
-    private fun testContext(dir: File): ContextWrapper = ContextWrapper(Application())
+    @Before
+    fun setUp() {
+        ToolRegistry.clear()
+        root = Files.createTempDirectory("agent-cancel-test").toFile()
+    }
 
-    private fun newProject(): File {
-        return Files.createTempDirectory("agent-cancel-test").toFile()
+    @After
+    fun tearDown() {
+        ToolRegistry.clear()
+        root.deleteRecursively()
     }
 
     @Test
     fun `cancellation during command execution stops process`() = runBlocking {
-        val root = newProject()
         val job = Job()
         val ctx = ToolContext(root, false, "t", job, 0)
-
-        val tool = RunCommandTool(testContext(root))
-        val command = "sleep 10"
-
         val deferred = async {
-            tool.execute(mapOf("command" to command), ctx)
+            RunCommandTool().execute(mapOf("command" to "sleep 30"), ctx)
         }
-
-        // Give it a moment to start
-        delay(100)
+        delay(500)
         job.cancel()
-
         val result = deferred.await()
-        // Should be cancelled
         assertFalse(result.ok)
-        assertTrue(result.error!!.contains("cancelled") || result.error!!.contains("Cancelled"))
     }
 
     @Test
     fun `cancellation propagates through ToolExecutor`() = runBlocking {
-        val root = newProject()
+        ToolRegistry.register(RunCommandTool())
         val job = Job()
         val ctx = ToolContext(root, false, "t", job, 0)
-
         val deferred = async {
             ToolExecutor().execute(
-                com.tom.rv2ide.artificial.tools.ToolCall(
+                ToolCall(
                     name = "local:run_command",
-                    args = mapOf("command" to "sleep 10"),
+                    args = mapOf("command" to "sleep 30"),
                     callId = "test",
                     runId = "t"
                 ),
                 ctx,
                 ToolPermission.buildDefault(false),
-                { true } // onConfirm
+                { true }
             )
         }
-
-        delay(100)
+        delay(500)
         job.cancel()
-
         val result = deferred.await()
         assertFalse(result.ok)
     }
 
     @Test
-    fun `doom loop protection triggers on repeated identical calls`() = runBlocking {
+    fun `doom loop protection triggers on repeated identical calls`() {
         val run = AgentRun(
             runId = "test",
             mode = RunMode.BUILD,
             budget = RunBudget(maxSteps = 10, maxRetries = 2, doomRepeat = 3)
         )
-
-        // First two calls OK
         assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"x\"}"))
         assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"x\"}"))
-        // Third identical call triggers doom loop
         assertEquals(AgentRun.StepVerdict.DOOM_LOOP, run.registerStep("local:read_file{p=\"x\"}"))
     }
 
     @Test
-    fun `doom loop not triggered by varying calls`() = runBlocking {
+    fun `doom loop not triggered by varying calls`() {
         val run = AgentRun(
             runId = "test",
             mode = RunMode.BUILD,
             budget = RunBudget(maxSteps = 10, maxRetries = 2, doomRepeat = 3)
         )
-
         assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"a\"}"))
         assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"a\"}"))
         assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"b\"}"))

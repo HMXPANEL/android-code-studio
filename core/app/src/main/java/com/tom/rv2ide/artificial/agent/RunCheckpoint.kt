@@ -54,7 +54,6 @@ class RunCheckpoint private constructor(
          * Attempts to create a checkpoint for the given project and run.
          * Returns null if the project is not a Git repository or Git is unavailable.
          */
-        @Suppress("UNUSED_PARAMETER")
         fun createIfPossible(projectRoot: File, runId: String): RunCheckpoint? {
             return try {
                 RunCheckpoint(projectRoot, runId)
@@ -86,17 +85,7 @@ class RunCheckpoint private constructor(
     private fun createCheckpointCommit(): String? {
         return try {
             val gm = gitManager!!
-            // Stage all changes
-            gm.git?.add()?.addFilepattern(".")?.call()
-            // Commit with a distinctive message
-            val message = "agent-checkpoint: run $runId"
-            val success = gm.commit(message, "Agent", "agent@hmx")
-            if (success) {
-                // Get the commit hash
-                gm.getCommitHistory(1).firstOrNull()?.hash
-            } else {
-                null
-            }
+            gm.stageAllAndCommit("agent-checkpoint: run $runId")
         } catch (e: Exception) {
             null
         }
@@ -110,13 +99,7 @@ class RunCheckpoint private constructor(
         val hash = checkpointCommitHash.get()
         return if (hash != null && gitManager != null) {
             try {
-                val gm = gitManager!!
-                // Hard reset to the checkpoint commit
-                gm.git?.reset()
-                    ?.setMode(org.eclipse.jgit.api.ResetCommand.ResetType.HARD)
-                    ?.setRef(hash)
-                    ?.call()
-                true
+                gitManager!!.hardResetTo(hash)
             } catch (e: Exception) {
                 false
             }

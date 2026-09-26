@@ -17,8 +17,7 @@
 
 package com.tom.rv2ide.artificial.agent
 
-import com.tom.rv2ide.artificial.agents.AIAgent
-import kotlinx.coroutines.CancellationException
+import com.tom.rv2ide.artificial.agents.AIAgentManager
 
 /**
  * Narrow provider-call seam for JVM testability.

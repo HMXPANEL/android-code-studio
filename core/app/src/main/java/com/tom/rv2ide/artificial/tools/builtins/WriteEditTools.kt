@@ -71,7 +71,7 @@ class WriteFileTool(appContext: Context) : Tool {
     } catch (e: Exception) {
       return ToolResult.failure("Could not read existing file '$pathArg': ${e.message}")
     }
-    return WriteVerification.writeAndVerify(writer, file, content, previous, true)
+    return WriteVerification.writeAndVerify(file, content, previous, writer::writeFile, true)
   }
 }
 
@@ -150,7 +150,7 @@ class EditFileTool(appContext: Context) : Tool {
               false
             }
             if (!verified) {
-              val restored = WriteVerification.restoreToPrevious(writer, file, current)
+              val restored = WriteVerification.restoreToPrevious(file, current, writer::writeFile)
               ctx.onFileModified?.invoke(file.absolutePath, current, current, false)
               return ToolResult.failure(
                   "Edit FAILED verification: replacement not found on disk." +
@@ -166,7 +166,7 @@ class EditFileTool(appContext: Context) : Tool {
           }
           else -> {
             // Roll back to the pre-edit content; report both outcomes.
-            val rolledBack = WriteVerification.restoreToPrevious(writer, file, current)
+            val rolledBack = WriteVerification.restoreToPrevious(file, current, writer::writeFile)
             val detail = if (writeResult is FileWriteResult.PermissionDenied) {
               writeResult.reason
             } else {

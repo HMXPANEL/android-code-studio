@@ -265,6 +265,39 @@ class GitManager(private val projectPath: String) {
             false
         }
     }
+
+    /**
+     * Stages all working-tree changes and commits them, returning the new
+     * commit hash on success or null on failure. Additive helper for the
+     * agent run-checkpoint feature; existing behavior is unchanged.
+     */
+    fun stageAllAndCommit(message: String, author: String = "Agent", email: String = "agent@hmx"): String? {
+        return try {
+            git?.add()?.addFilepattern(".")?.call()
+            val ok = commit(message, author, email)
+            if (ok) getCommitHistory(1).firstOrNull()?.hash else null
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    /**
+     * Hard-resets the working tree to the given commit ref. Additive helper
+     * for the agent run-checkpoint restore path; existing behavior unchanged.
+     */
+    fun hardResetTo(ref: String): Boolean {
+        return try {
+            git?.reset()
+                ?.setMode(org.eclipse.jgit.api.ResetCommand.ResetType.HARD)
+                ?.setRef(ref)
+                ?.call()
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
     
     fun getCommitHistory(maxCount: Int = 100): List<CommitInfo> {
         val commits = mutableListOf<CommitInfo>()

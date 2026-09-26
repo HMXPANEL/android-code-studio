@@ -315,10 +315,10 @@ class AIAgentManager(private val context: Context) {
 
                         val file = File(currentFile)
                         val toolResult = WriteVerification.writeAndVerify(
-                            writer = legacyWriter,
                             file = file,
                             content = cleanedContent,
                             previous = previousContent,
+                            write = legacyWriter::writeFile,
                             createBackup = true
                         )
 
@@ -355,10 +355,10 @@ class AIAgentManager(private val context: Context) {
 
                 val file = File(currentFile)
                 val toolResult = WriteVerification.writeAndVerify(
-                    writer = legacyWriter,
                     file = file,
                     content = cleanedContent,
                     previous = previousContent,
+                    write = legacyWriter::writeFile,
                     createBackup = true
                 )
 

@@ -9,13 +9,13 @@ import com.tom.rv2ide.artificial.tools.ToolRegistry
 import com.tom.rv2ide.artificial.tools.builtins.RunCommandTool
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 
@@ -50,8 +50,15 @@ class CancellationTest {
         }
         delay(500)
         job.cancel()
-        val result = deferred.await()
-        assertFalse(result.ok)
+        // By executor/tool contract, run cancellation propagates as
+        // CancellationException rather than a failure result.
+        var outcome = "returned normally"
+        try {
+            deferred.await()
+        } catch (e: CancellationException) {
+            outcome = "threw CancellationException"
+        }
+        assertEquals("threw CancellationException", outcome)
     }
 
     @Test
@@ -74,8 +81,13 @@ class CancellationTest {
         }
         delay(500)
         job.cancel()
-        val result = deferred.await()
-        assertFalse(result.ok)
+        var outcome = "returned normally"
+        try {
+            deferred.await()
+        } catch (e: CancellationException) {
+            outcome = "threw CancellationException"
+        }
+        assertEquals("threw CancellationException", outcome)
     }
 
     @Test
@@ -97,10 +109,11 @@ class CancellationTest {
             mode = RunMode.BUILD,
             budget = RunBudget(maxSteps = 10, maxRetries = 2, doomRepeat = 3)
         )
+        // Alternating fingerprints never fill the window with identical entries.
         assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"a\"}"))
+        assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"b\"}"))
         assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"a\"}"))
         assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"b\"}"))
-        assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"b\"}"))
-        assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"b\"}"))
+        assertEquals(AgentRun.StepVerdict.OK, run.registerStep("local:read_file{p=\"a\"}"))
     }
 }

@@ -187,15 +187,14 @@ class AgentController(
                 snippetParser = snippetParser
             )
             if (converted.isNotEmpty()) {
-              val verdict = executeOneCall(
-                  call = converted.first(),
+              val verdict = executeCallsBatch(
+                  calls = converted,
                   run = run,
                   permission = permission,
                   planMode = planMode,
                   projectRoot = projectRoot,
                   events = events,
                   onConfirm = onConfirm,
-                  ignoredExtra = converted.size - 1,
                   nudge = nudge
               )
               if (verdict == LoopAction.STOP) return run
@@ -211,17 +210,15 @@ class AgentController(
           return run
         }
 
-        // Deterministic: execute the first call; note any extras as ignored.
-        val call = parsed.calls.first()
-        val verdict = executeOneCall(
-            call = call,
+        // Execute ALL parsed calls sequentially in this turn.
+        val verdict = executeCallsBatch(
+            calls = parsed.calls,
             run = run,
             permission = permission,
             planMode = planMode,
             projectRoot = projectRoot,
             events = events,
             onConfirm = onConfirm,
-            ignoredExtra = parsed.calls.size - 1,
             nudge = nudge
         )
         if (verdict == LoopAction.STOP) return run
@@ -241,59 +238,95 @@ class AgentController(
     STOP
   }
 
-  private suspend fun executeOneCall(
-      call: ToolCall,
-      run: AgentRun,
-      permission: ToolPermission,
-      planMode: Boolean,
-      projectRoot: File,
-      events: (AgentEvents) -> Unit,
-      onConfirm: suspend (ToolCall) -> Boolean,
-      ignoredExtra: Int,
-      nudge: NudgeState
-  ): LoopAction {
-    // Never start another tool on a dead run (cancellation landed between turns).
+  /**
+ * Executes a batch of tool calls sequentially. Returns STOP if the run should
+ * terminate (budget exhausted, doom loop, cancellation, or repeated failures),
+ * CONTINUE if the model should be called again for the next turn.
+ */
+private suspend fun executeCallsBatch(
+    calls: List<ToolCall>,
+    run: AgentRun,
+    permission: ToolPermission,
+    planMode: Boolean,
+    projectRoot: File,
+    events: (AgentEvents) -> Unit,
+    onConfirm: suspend (ToolCall) -> Boolean,
+    nudge: NudgeState
+): LoopAction {
+  // Propose all tools at once so the UI can show the full batch
+  run.transitionTo(AgentState.PROPOSING_TOOLS)
+  events(AgentEvents.ToolsProposed(calls))
+
+  for ((index, call) in calls.withIndex()) {
+    // Check for cancellation before each call
     run.job.ensureActive()
     if (run.state == AgentState.CANCELLED) {
       throw CancellationException("Run cancelled before tool execution.")
     }
-    run.transitionTo(AgentState.PROPOSING_TOOLS)
-    events(AgentEvents.ToolsProposed(listOf(call)))
-    if (ignoredExtra > 0) {
-      run.addEntry(
-          EntryRole.SYSTEM,
-          "Note: $ignoredExtra extra tool call(s) in the same reply were skipped; one call per turn."
-      )
-    }
 
-    when (run.registerStep(call.fingerprint())) {
-      AgentRun.StepVerdict.BUDGET_EXHAUSTED -> {
-        run.transitionTo(AgentState.FINALIZING)
-        val text = "Stopped after ${run.budget.maxSteps} steps without a final answer. " +
-            "Partial progress is preserved above; try a smaller request."
-        run.addEntry(EntryRole.FINAL, text)
-        events(AgentEvents.FinalAnswer(text, false))
-        run.checkpoint?.release()
-        run.transitionTo(AgentState.DONE)
-        clearRun(run)
-        return LoopAction.STOP
-      }
-      AgentRun.StepVerdict.DOOM_LOOP -> {
-        run.transitionTo(AgentState.FINALIZING)
-        val text = "Stopped: '${call.name}' was repeated with identical arguments " +
-            "${run.budget.doomRepeat} times. Please rephrase or narrow the request."
-        run.addEntry(EntryRole.FINAL, text)
-        events(AgentEvents.FinalAnswer(text, false))
-        run.checkpoint?.release()
-        run.transitionTo(AgentState.DONE)
-        clearRun(run)
-        return LoopAction.STOP
-      }
-      AgentRun.StepVerdict.OK -> { /* proceed */ }
+    val verdict = executeSingleCall(
+        call = call,
+        run = run,
+        permission = permission,
+        planMode = planMode,
+        projectRoot = projectRoot,
+        events = events,
+        onConfirm = onConfirm,
+        nudge = nudge
+    )
+    if (verdict == LoopAction.STOP) {
+      return LoopAction.STOP
     }
+  }
+  return LoopAction.CONTINUE
+}
 
-    run.transitionTo(AgentState.EXECUTING)
-    events(AgentEvents.ToolStarted(call))
+private suspend fun executeSingleCall(
+    call: ToolCall,
+    run: AgentRun,
+    permission: ToolPermission,
+    planMode: Boolean,
+    projectRoot: File,
+    events: (AgentEvents) -> Unit,
+    onConfirm: suspend (ToolCall) -> Boolean,
+    nudge: NudgeState
+): LoopAction {
+  // Never start another tool on a dead run (cancellation landed between turns).
+  run.job.ensureActive()
+  if (run.state == AgentState.CANCELLED) {
+    throw CancellationException("Run cancelled before tool execution.")
+  }
+  run.transitionTo(AgentState.PROPOSING_TOOLS)
+  events(AgentEvents.ToolsProposed(listOf(call)))
+
+  when (run.registerStep(call.fingerprint())) {
+    AgentRun.StepVerdict.BUDGET_EXHAUSTED -> {
+      run.transitionTo(AgentState.FINALIZING)
+      val text = "Stopped after ${run.budget.maxSteps} steps without a final answer. " +
+          "Partial progress is preserved above; try a smaller request."
+      run.addEntry(EntryRole.FINAL, text)
+      events(AgentEvents.FinalAnswer(text, false))
+      run.checkpoint?.release()
+      run.transitionTo(AgentState.DONE)
+      clearRun(run)
+      return LoopAction.STOP
+    }
+    AgentRun.StepVerdict.DOOM_LOOP -> {
+      run.transitionTo(AgentState.FINALIZING)
+      val text = "Stopped: '${call.name}' was repeated with identical arguments " +
+          "${run.budget.doomRepeat} times. Please rephrase or narrow the request."
+      run.addEntry(EntryRole.FINAL, text)
+      events(AgentEvents.FinalAnswer(text, false))
+      run.checkpoint?.release()
+      run.transitionTo(AgentState.DONE)
+      clearRun(run)
+      return LoopAction.STOP
+    }
+    AgentRun.StepVerdict.OK -> { /* proceed */ }
+  }
+
+  run.transitionTo(AgentState.EXECUTING)
+  events(AgentEvents.ToolStarted(call))
 
     val tool = registry.lookup(call.name)
     val needsConfirm = tool != null &&

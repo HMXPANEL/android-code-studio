@@ -104,27 +104,39 @@ class AgentControllerTest {
       onEvent: (AgentEvents) -> Unit = {},
       request: String = "do the work"
   ): AgentRun {
+    val provider = FakeProviderCall(replies)
+    lastProvider = provider
     val c = AgentController(
-        providerCall = FakeProviderCall(replies),
+        providerCall = provider,
         permissionFor = permissionFor
     )
     controller = c
     var captured: AgentRun? = null
     try {
       runBlocking {
-        c.runAgent(
-            userRequest = request,
-            mode = mode,
-            projectRoot = root,
-            events = { event ->
-              eventLog.add(event)
-              if (event is AgentEvents.RunStarted) {
-                captured = c.activeRun
-              }
-              onEvent(event)
-            },
-            onConfirm = onConfirm
-        ).also { captured = it }
+        try {
+          c.runAgent(
+              userRequest = request,
+              mode = mode,
+              projectRoot = root,
+              events = { event ->
+                eventLog.add(event)
+                if (event is AgentEvents.RunStarted) {
+                  captured = c.activeRun
+                }
+                onEvent(event)
+              },
+              onConfirm = onConfirm
+          ).also { captured = it }
+        } finally {
+          // AgentRun.job is parented to this runBlocking coroutine and is only
+          // cancelled by an explicit run.cancel(), never by normal
+          // DONE/FAILED termination. Release it here or runBlocking waits on
+          // that child forever. (Production hangs the calling `launch` the same
+          // way, but lifecycleScope teardown masks it.) See the completion
+          // report's finding list.
+          (captured ?: c.activeRun)?.job?.cancel()
+        }
       }
     } catch (t: Throwable) {
       // A cancelled run rethrows by contract; anything else is a real failure.

@@ -104,10 +104,8 @@ class AgentControllerTest {
       onEvent: (AgentEvents) -> Unit = {},
       request: String = "do the work"
   ): AgentRun {
-    val provider = FakeProviderCall(replies)
-    lastProvider = provider
     val c = AgentController(
-        providerCall = provider,
+        providerCall = FakeProviderCall(replies),
         permissionFor = permissionFor
     )
     controller = c

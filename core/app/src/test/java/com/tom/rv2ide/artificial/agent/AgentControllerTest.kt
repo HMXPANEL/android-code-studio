@@ -418,14 +418,21 @@ class AgentControllerTest {
     ToolRegistry.register(probe("test:noop"))
     val provider = FakeProviderCall(listOf("All done."))
     val c = AgentController(providerCall = provider)
+    // Use a minimal runBlocking with job cleanup so the test doesn't hang
+    // waiting for the AgentRun.job child (SupervisorJob) to complete.
+    var capturedRun: AgentRun? = null
     runBlocking {
-      c.runAgent(
-          userRequest = "do the work",
-          mode = RunMode.BUILD,
-          projectRoot = root,
-          events = {},
-          onConfirm = { true }
-      )
+      try {
+        c.runAgent(
+            userRequest = "do the work",
+            mode = RunMode.BUILD,
+            projectRoot = root,
+            events = { if (it is AgentEvents.RunStarted) capturedRun = c.activeRun },
+            onConfirm = { true }
+        ).also { capturedRun = it }
+      } finally {
+        capturedRun?.job?.cancel()
+      }
     }
     val prompt = provider.prompts.single()
     // CHARACTERIZATION (STEP 1): both strings contradict executeCallsBatch(),

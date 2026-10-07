@@ -394,7 +394,7 @@ class AgentControllerTest {
     val run = executeRun(listOf(reply, "All done."))
     assertEquals(AgentState.DONE, run.state)
     assertEquals("app/src/Main.kt", capturedPath)
-    assertNotNull(capturedContent, "legacy conversion must always supply content")
+    assertNotNull("legacy conversion must always supply content", capturedContent)
     assertEquals(1, finished().size)
     assertEquals("local:write_file", finished()[0].call.name)
     assertTrue(finished()[0].call.legacy)

@@ -41,14 +41,20 @@ import kotlinx.coroutines.withContext
  * Owns Phase 1 agent runs: step budget, cancellation, transcript, and the
  * model → tool → result loop.
  *
- * Depends on [AIAgentManager] for provider calls (unchanged behavior) and on
+ * Depends on [ProviderCall] for provider calls (unchanged behavior) and on
  * the tool runtime for everything else. One active run at a time per
  * controller; a new user message cancels the previous run first.
  * Tool execution is strictly sequential in Phase 1.
+ *
+ * [manager] is only used for provider-side modification history and is optional
+ * so JVM tests can construct a controller with an injected [ProviderCall];
+ * production passes the real manager and behaves exactly as before.
  */
 class AgentController(
-    private val manager: AIAgentManager,
-    private val providerCall: ProviderCall = ProviderCallImpl(manager),
+    private val manager: AIAgentManager? = null,
+    private val providerCall: ProviderCall = ProviderCallImpl(
+        requireNotNull(manager) { "AgentController requires a manager or an explicit providerCall" }
+    ),
     private val registry: ToolRegistry = ToolRegistry,
     private val executor: ToolExecutor = ToolExecutor(),
     private val callSource: ToolCallSource = TextProtocolSource(),
@@ -356,7 +362,7 @@ private suspend fun executeSingleCall(
               }
             }
             try {
-              manager.getCurrentAgent()?.recordModification(path, previous, new, true)
+              manager?.getCurrentAgent()?.recordModification(path, previous, new, true)
             } catch (e: Exception) {
               // History bookkeeping must never break a run.
             }

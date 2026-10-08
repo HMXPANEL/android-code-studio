@@ -13,17 +13,19 @@
  *
  *  You should have received a copy of the GNU General Public License
  *   along with AndroidCodeStudio.  If not, see <https://www.gnu.org/licenses/>.
-*/
+ */
 
 package com.tom.rv2ide.artificial.agents
 
 import android.content.Context
 import com.tom.rv2ide.artificial.project.awareness.ProjectTreeResult
 import com.tom.rv2ide.artificial.file.FileWriteResult
+import com.tom.rv2ide.artificial.agent.NativeFunctionCallResponse
+import kotlinx.coroutines.Result
 
 /*
  * @author Mohammed-baqer-null @ https://github.com/Mohammed-baqer-null
-*/
+ */
 
 interface AIAgent {
     val providerId: String
@@ -41,6 +43,29 @@ interface AIAgent {
         language: String,
         projectStructure: String?
     ): Result<String>
+    
+    /**
+     * Optional: Generates a response with native function calling.
+     *
+     * Implementations for providers that support native function calling
+     * (Gemini, OpenAI, Anthropic) should override this. The default
+     * implementation returns a failure, causing fallback to text-based
+     * [generateCode].
+     *
+     * @param prompt the full assembled prompt
+     * @param functionDeclarations the available tool declarations in provider-specific format
+     * @param language the target programming language
+     * @param projectStructure optional project structure context
+     * @return a response containing function calls and/or text
+     */
+    suspend fun generateWithFunctions(
+        prompt: String,
+        functionDeclarations: List<Any>,
+        language: String = "kotlin",
+        projectStructure: String? = null
+    ): Result<NativeFunctionCallResponse> = Result.failure(
+        UnsupportedOperationException("Native function calling not supported by this provider")
+    )
     
     fun recordModification(filePath: String, oldContent: String?, newContent: String, success: Boolean)
     fun undoLastModification(): Boolean

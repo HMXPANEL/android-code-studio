@@ -18,6 +18,7 @@
 package com.tom.rv2ide.artificial.agent
 
 import com.tom.rv2ide.artificial.agents.AIAgentManager
+import com.tom.rv2ide.artificial.agent.NativeFunctionCallResponse
 import com.tom.rv2ide.artificial.agent.RunCheckpoint
 import com.tom.rv2ide.artificial.parser.SnippetParser
 import com.tom.rv2ide.artificial.tools.ConfirmPolicy
@@ -58,6 +59,7 @@ class AgentController(
     private val registry: ToolRegistry = ToolRegistry,
     private val executor: ToolExecutor = ToolExecutor(),
     private val callSource: ToolCallSource = TextProtocolSource(),
+    private val nativeFunctionCallSource: ToolCallSource = NativeFunctionCallSource(),
     private val permissionFor: (RunMode) -> ToolPermission = { mode ->
       ToolPermission.buildDefault(planMode = mode == RunMode.PLAN)
     }
@@ -129,49 +131,84 @@ class AgentController(
         )
         events(AgentEvents.Thinking("Thinking (step ${run.stepCount + 1})…"))
 
-        val reply: String = try {
+// Try native function calling first, fall back to text protocol.
+        // Build function declarations for the provider.
+        val functionDeclarations = buildFunctionDeclarations(planMode)
+
+        val nativeResponse: Result<NativeFunctionCallResponse> = try {
           withContext(run.job) {
-            providerCall.generateCode(
+            providerCall.generateWithFunctions(
                 prompt = prompt,
+                functionDeclarations = functionDeclarations,
                 language = "kotlin",
                 projectStructure = null
-            )
-          }.getOrElse { error ->
-            return failRun(
-                run, events,
-                "AI request failed: ${error.message ?: "unknown error"}"
             )
           }
         } catch (e: CancellationException) {
           throw e
         } catch (e: Exception) {
-          return failRun(run, events, "AI request failed: ${e.message}")
+          Result.failure(e)
         }
 
-        // Late-result guard: if cancellation landed while the provider call
-        // was in flight, abandon the reply instead of letting it flip a
-        // CANCELLED run back toward DONE.
-        run.job.ensureActive()
-        if (run.state == AgentState.CANCELLED) {
-          throw CancellationException("Run cancelled before processing provider reply.")
-        }
-
-        run.addEntry(EntryRole.THOUGHT, reply.take(MAX_THOUGHT_CHARS))
-        events(AgentEvents.ModelReply(reply))
-
-        val parsed = try {
-          (callSource as? TextProtocolSource)?.parseFull(reply, run.runId)
-              ?: ParsedReply(
-                  calls = callSource.extractCalls(reply, run.runId),
-                  errors = callSource.extractErrors(reply, run.runId),
-                  hasLegacyModifications = false,
-                  legacyFiles = emptyList()
+        // If native function calling succeeded and returned function calls, use them.
+        // Otherwise fall back to text-based protocol.
+        val parsed = if (nativeResponse.isSuccess && nativeResponse.getOrNull()?.functionCalls?.isNotEmpty() == true) {
+          val response = nativeResponse.getOrNull()!!
+          run.addEntry(EntryRole.THOUGHT, response.text.take(MAX_THOUGHT_CHARS))
+          if (response.text.isNotBlank()) {
+            events(AgentEvents.ModelReply(response.text))
+          }
+          ParsedReply(
+              calls = nativeFunctionCallSource.parseNativeResponse(response, run.runId),
+              errors = emptyList(),
+              hasLegacyModifications = false,
+              legacyFiles = emptyList()
+          )
+        } else {
+          // Fall back to text-based protocol
+          val reply: String = try {
+            withContext(run.job) {
+              providerCall.generateCode(
+                  prompt = prompt,
+                  language = "kotlin",
+                  projectStructure = null
               )
-        } catch (e: CancellationException) {
-          throw e
-        } catch (e: Exception) {
-          return failRun(run, events, "Reply parsing failed: ${e.message}")
-        }
+            }.getOrElse { error ->
+              return failRun(
+                  run, events,
+                  "AI request failed: ${error.message ?: "unknown error"}"
+              )
+            }
+          } catch (e: CancellationException) {
+            throw e
+          } catch (e: Exception) {
+            return failRun(run, events, "AI request failed: ${e.message}")
+          }
+
+          // Late-result guard: if cancellation landed while the provider call
+          // was in flight, abandon the reply instead of letting it flip a
+          // CANCELLED run back toward DONE.
+          run.job.ensureActive()
+          if (run.state == AgentState.CANCELLED) {
+            throw CancellationException("Run cancelled before processing provider reply.")
+          }
+
+          run.addEntry(EntryRole.THOUGHT, reply.take(MAX_THOUGHT_CHARS))
+          events(AgentEvents.ModelReply(reply))
+
+          val parsed = try {
+            (callSource as? TextProtocolSource)?.parseFull(reply, run.runId)
+                ?: ParsedReply(
+                    calls = callSource.extractCalls(reply, run.runId),
+                    errors = callSource.extractErrors(reply, run.runId),
+                    hasLegacyModifications = false,
+                    legacyFiles = emptyList()
+                )
+          } catch (e: CancellationException) {
+            throw e
+          } catch (e: Exception) {
+            return failRun(run, events, "Reply parsing failed: ${e.message}")
+          }
 
         // Malformed tool blocks: guided retry, counted against the budget.
         if (parsed.calls.isEmpty() && parsed.errors.isNotEmpty()) {
@@ -572,6 +609,21 @@ private suspend fun executeSingleCall(
       }
     } catch (e: Exception) {
       "(project tree unavailable: ${e.message})"
+    }
+  }
+
+    /**
+   * Builds function declarations for the current provider from the tool registry.
+   * Filters tools based on plan mode (only READ tools in PLAN mode).
+   **/
+  private fun buildFunctionDeclarations(planMode: Boolean): List<Any> {
+    val usableTools = registry.all().filter { it.visible companion object {companion object { (!planMode || it.kind == ToolKind.READ) }
+    return usableTools.map { tool ->
+      mapOf(
+          "name" to tool.id,
+          "description" to tool.description,
+          "parameters" to tool.schema.toJsonSchema()
+      )
     }
   }
 

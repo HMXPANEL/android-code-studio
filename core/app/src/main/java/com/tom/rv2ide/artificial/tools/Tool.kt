@@ -76,6 +76,33 @@ data class ToolInputField(
 data class ToolSchema(val fields: List<ToolInputField>) {
 
   fun field(name: String): ToolInputField? = fields.firstOrNull { it.name == name }
+
+  /**
+   * Converts this schema to a JSON Schema object suitable for provider
+   * function calling APIs (OpenAI, Gemini, Anthropic).
+   */
+  fun toJsonSchema(): Map<String, Any?> {
+    val properties = mutableMapOf<String, Any?>()
+    val required = mutableListOf<String>()
+
+    fields.forEach { field ->
+      val fieldSchema = mutableMapOf<String, Any?>()
+      fieldSchema["type"] = field.type.name.lowercase()
+      field.description?.let { fieldSchema["description"] = it }
+      field.default?.let { fieldSchema["default"] = it }
+      properties[field.name] = fieldSchema
+      if (field.required) {
+        required.add(field.name)
+      }
+    }
+
+    return mapOf(
+        "type" to "object",
+        "properties" to properties,
+        "required" to required,
+        "additionalProperties" to false
+    )
+  }
 }
 
 /** Uniform envelope every tool execution returns. Never throws past executor. */

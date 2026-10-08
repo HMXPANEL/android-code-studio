@@ -18,6 +18,7 @@
 package com.tom.rv2ide.artificial.agent
 
 import com.tom.rv2ide.artificial.agents.AIAgentManager
+import kotlinx.coroutines.Result
 
 /**
  * Narrow provider-call seam for JVM testability.
@@ -29,6 +30,10 @@ import com.tom.rv2ide.artificial.agents.AIAgentManager
  *
  * Do not add tool-calling or native function-calling methods here;
  * those belong in [ToolCallSource] implementations (Phase 2+).
+ *
+ * Phase 2 addition: optional native function calling support.
+ * Providers that support native function calling can implement
+ * [generateWithFunctions] for direct function calling.
  */
 interface ProviderCall {
     /**
@@ -44,6 +49,28 @@ interface ProviderCall {
         language: String = "kotlin",
         projectStructure: String? = null
     ): Result<String>
+
+    /**
+     * Optional: Generates a response with native function calling.
+     *
+     * Providers that support native function calling (Gemini, OpenAI, Anthropic)
+     * should implement this. The default implementation returns a failure,
+     * causing the caller to fall back to text-based [generateCode].
+     *
+     * @param prompt the full assembled prompt including system, tools, history, and user request
+     * @param functionDeclarations the available tool declarations in provider-specific format
+     * @param language the target programming language (default "kotlin")
+     * @param projectStructure optional project structure context
+     * @return a response containing function calls and/or text
+     */
+    suspend fun generateWithFunctions(
+        prompt: String,
+        functionDeclarations: List<Any>,
+        language: String = "kotlin",
+        projectStructure: String? = null
+    ): Result<NativeFunctionCallResponse> = Result.failure(
+        UnsupportedOperationException("Native function calling not supported by this provider")
+    )
 
     /**
      * Returns the provider's display name for logging/debugging.
@@ -66,6 +93,25 @@ class ProviderCallImpl(private val manager: AIAgentManager) : ProviderCall {
             agent.generateCode(
                 prompt = prompt,
                 context = null,
+                language = language,
+                projectStructure = projectStructure
+            )
+        } else {
+            Result.failure(IllegalStateException("No AI provider is configured. Set an API key first."))
+        }
+    }
+
+    override suspend fun generateWithFunctions(
+        prompt: String,
+        functionDeclarations: List<Any>,
+        language: String = "kotlin",
+        projectStructure: String? = null
+    ): Result<NativeFunctionCallResponse> {
+        val agent = manager.getCurrentAgent()
+        return if (agent != null) {
+            agent.generateWithFunctions(
+                prompt = prompt,
+                functionDeclarations = functionDeclarations,
                 language = language,
                 projectStructure = projectStructure
             )

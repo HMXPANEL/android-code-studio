@@ -617,7 +617,7 @@ private suspend fun executeSingleCall(
    * Filters tools based on plan mode (only READ tools in PLAN mode).
    **/
   private fun buildFunctionDeclarations(planMode: Boolean): List<Any> {
-    val usableTools = registry.all().filter { it.visible companion object {companion object { (!planMode || it.kind == ToolKind.READ) }
+    val usableTools = registry.all().filter { it.visible && (!planMode || it.kind == ToolKind.READ) }
     return usableTools.map { tool ->
       mapOf(
           "name" to tool.id,

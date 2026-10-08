@@ -147,7 +147,7 @@ class AgentController(
         } catch (e: CancellationException) {
           throw e
         } catch (e: Exception) {
-          Result.failure<NativeFunctionCallResponse>(e)
+          Result.failure(e)
         }
 
         // If native function calling succeeded and returned function calls, use them.

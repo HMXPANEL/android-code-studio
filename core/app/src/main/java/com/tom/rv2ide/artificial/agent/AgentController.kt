@@ -135,21 +135,19 @@ class AgentController(
         // Build function declarations for the provider.
         val functionDeclarations = buildFunctionDeclarations(planMode)
 
-        // Use a regular try-catch instead of try-expression to avoid type inference issues.
-        val nativeResponse: Result<NativeFunctionCallResponse>
-        try {
-          withContext(run.job) {
-            nativeResponse = providerCall.generateWithFunctions(
-                prompt = prompt,
-                functionDeclarations = functionDeclarations,
-                language = "kotlin",
-                projectStructure = null
-            )
-          }
+        val nativeResponse = try {
+            withContext(run.job) {
+                providerCall.generateWithFunctions(
+                    prompt = prompt,
+                    functionDeclarations = functionDeclarations,
+                    language = "kotlin",
+                    projectStructure = null
+                )
+            }
         } catch (e: CancellationException) {
-          throw e
+            throw e
         } catch (e: Exception) {
-          nativeResponse = Result.failure(e)
+            Result.failure(e)
         }
 
         // If native function calling succeeded and returned function calls, use them.

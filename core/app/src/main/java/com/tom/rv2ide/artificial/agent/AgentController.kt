@@ -135,22 +135,12 @@ class AgentController(
         // Build function declarations for the provider.
         val functionDeclarations = buildFunctionDeclarations(planMode)
 
-        // Use a regular try-catch statement to avoid try-expression type inference issues.
-        val nativeResponse: Result<NativeFunctionCallResponse>
-        try {
-            withContext(run.job) {
-                nativeResponse = providerCall.generateWithFunctions(
-                    prompt = prompt,
-                    functionDeclarations = functionDeclarations,
-                    language = "kotlin",
-                    projectStructure = null
-                )
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            nativeResponse = Result.failure(e)
-        }
+        // Call native function calling in a separate function to avoid nested try-catch issues.
+        val nativeResponse = callNativeFunctionCalling(
+            run = run,
+            prompt = prompt,
+            functionDeclarations = functionDeclarations
+        )
 
         // If native function calling succeeded and returned function calls, use them.
         // Otherwise fall back to text-based protocol.
@@ -626,6 +616,31 @@ private suspend fun executeSingleCall(
           "description" to tool.description,
           "parameters" to tool.schema.toJsonSchema()
       )
+    }
+
+  /**
+   * Calls native function calling API with proper error handling.
+   * This is extracted to a separate function to avoid nested try-catch issues
+   * and type inference problems with try-expressions.
+   */
+  private suspend fun callNativeFunctionCalling(
+      run: AgentRun,
+      prompt: String,
+      functionDeclarations: List<Any>
+  ): Result<NativeFunctionCallResponse> {
+    try {
+      withContext(run.job) {
+        return providerCall.generateWithFunctions(
+            prompt = prompt,
+            functionDeclarations = functionDeclarations,
+            language = "kotlin",
+            projectStructure = null
+        )
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      return Result.failure(e)
     }
   }
 

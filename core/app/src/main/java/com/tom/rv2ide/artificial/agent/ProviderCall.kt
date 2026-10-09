@@ -18,7 +18,6 @@
 package com.tom.rv2ide.artificial.agent
 
 import com.tom.rv2ide.artificial.agents.AIAgentManager
-import kotlinx.coroutines.Result
 
 /**
  * Narrow provider-call seam for JVM testability.

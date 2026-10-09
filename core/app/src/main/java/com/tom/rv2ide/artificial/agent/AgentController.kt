@@ -26,6 +26,7 @@ import com.tom.rv2ide.artificial.tools.RunMode
 import com.tom.rv2ide.artificial.tools.ToolCall
 import com.tom.rv2ide.artificial.tools.ToolContext
 import com.tom.rv2ide.artificial.tools.ToolDecision
+import com.tom.rv2ide.artificial.tools.ToolKind
 import com.tom.rv2ide.artificial.tools.ToolExecutor
 import com.tom.rv2ide.artificial.tools.ToolPermission
 import com.tom.rv2ide.artificial.tools.ToolRegistry
@@ -131,7 +132,7 @@ class AgentController(
         )
         events(AgentEvents.Thinking("Thinking (step ${run.stepCount + 1})…"))
 
-// Try native function calling first, fall back to text protocol.
+        // Try native function calling first, fall back to text protocol.
         // Build function declarations for the provider.
         val functionDeclarations = buildFunctionDeclarations(planMode)
 
@@ -144,18 +145,21 @@ class AgentController(
 
         // If native function calling succeeded and returned function calls, use them.
         // Otherwise fall back to text-based protocol.
-        val parsed = if (nativeResponse.isSuccess && nativeResponse.getOrNull()?.functionCalls?.isNotEmpty() == true) {
+        val parsed: ParsedReply
+        val replyText: String
+        if (nativeResponse.isSuccess && nativeResponse.getOrNull()?.functionCalls?.isNotEmpty() == true) {
           val response = nativeResponse.getOrNull()!!
           run.addEntry(EntryRole.THOUGHT, response.text.take(MAX_THOUGHT_CHARS))
           if (response.text.isNotBlank()) {
             events(AgentEvents.ModelReply(response.text))
           }
-          ParsedReply(
+          parsed = ParsedReply(
               calls = nativeFunctionCallSource.parseNativeResponse(response, run.runId),
               errors = emptyList(),
               hasLegacyModifications = false,
               legacyFiles = emptyList()
           )
+          replyText = response.text
         } else {
           // Fall back to text-based protocol
           val reply: String = try {
@@ -188,7 +192,7 @@ class AgentController(
           run.addEntry(EntryRole.THOUGHT, reply.take(MAX_THOUGHT_CHARS))
           events(AgentEvents.ModelReply(reply))
 
-          val parsed = try {
+          parsed = try {
             (callSource as? TextProtocolSource)?.parseFull(reply, run.runId)
                 ?: ParsedReply(
                     calls = callSource.extractCalls(reply, run.runId),
@@ -201,6 +205,8 @@ class AgentController(
           } catch (e: Exception) {
             return failRun(run, events, "Reply parsing failed: ${e.message}")
           }
+          replyText = reply
+        }
 
         // Malformed tool blocks: guided retry, counted against the budget.
         if (parsed.calls.isEmpty() && parsed.errors.isNotEmpty()) {
@@ -237,8 +243,8 @@ class AgentController(
             }
           }
           run.transitionTo(AgentState.FINALIZING)
-          run.addEntry(EntryRole.FINAL, reply.take(MAX_FINAL_CHARS))
-          events(AgentEvents.FinalAnswer(reply, parsed.hasLegacyModifications))
+          run.addEntry(EntryRole.FINAL, replyText.take(MAX_FINAL_CHARS))
+          events(AgentEvents.FinalAnswer(replyText, parsed.hasLegacyModifications))
           run.checkpoint?.release()
           run.transitionTo(AgentState.DONE)
           clearRun(run)
@@ -617,6 +623,7 @@ private suspend fun executeSingleCall(
           "parameters" to tool.schema.toJsonSchema()
       )
     }
+  }
 
   /**
    * Calls native function calling API with proper error handling.
@@ -652,5 +659,4 @@ private suspend fun executeSingleCall(
     internal const val MAX_TRANSCRIPT_TURNS = 10
     internal const val MAX_PROMPT_CHARS = 24000
   }
-}
 }

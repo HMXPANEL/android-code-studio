@@ -1,7 +1,6 @@
 package com.tom.rv2ide.artificial.agent
 
 import com.tom.rv2ide.artificial.tools.ToolCall
-import kotlinx.coroutines.Result
 
 /**
  * Provider-native function calling response.

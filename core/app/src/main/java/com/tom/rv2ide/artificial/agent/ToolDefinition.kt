@@ -1,7 +1,6 @@
 package com.tom.rv2ide.artificial.agent
 
-import com.tom.rv2ide.artificial.tools.ToolInputField
-import com.tom.rv2ide.artificial.tools.ToolInputType
+import com.tom.rv2ide.artificial.tools.ToolRegistry
 import com.tom.rv2ide.artificial.tools.ToolSchema
 
 /**

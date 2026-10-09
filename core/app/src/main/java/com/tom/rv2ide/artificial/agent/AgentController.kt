@@ -135,10 +135,6 @@ class AgentController(
         // Build function declarations for the provider.
         val functionDeclarations = buildFunctionDeclarations(planMode)
 
-// Try native function calling first, fall back to text protocol.
-        // Build function declarations for the provider.
-        val functionDeclarations = buildFunctionDeclarations(planMode)
-
         // Use a regular try-catch instead of try-expression to avoid type inference issues.
         val nativeResponse: Result<NativeFunctionCallResponse>
         try {

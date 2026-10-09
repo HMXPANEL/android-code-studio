@@ -103,8 +103,8 @@ class ProviderCallImpl(private val manager: AIAgentManager) : ProviderCall {
     override suspend fun generateWithFunctions(
         prompt: String,
         functionDeclarations: List<Any>,
-        language: String = "kotlin",
-        projectStructure: String? = null
+        language: String,
+        projectStructure: String?
     ): Result<NativeFunctionCallResponse> {
         val agent = manager.getCurrentAgent()
         return if (agent != null) {

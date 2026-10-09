@@ -60,7 +60,7 @@ class AgentController(
     private val registry: ToolRegistry = ToolRegistry,
     private val executor: ToolExecutor = ToolExecutor(),
     private val callSource: ToolCallSource = TextProtocolSource(),
-    private val nativeFunctionCallSource: ToolCallSource = NativeFunctionCallSource(),
+    private val nativeFunctionCallSource: NativeFunctionCallSource = NativeFunctionCallSource(),
     private val permissionFor: (RunMode) -> ToolPermission = { mode ->
       ToolPermission.buildDefault(planMode = mode == RunMode.PLAN)
     }
@@ -636,8 +636,8 @@ private suspend fun executeSingleCall(
       functionDeclarations: List<Any>
   ): Result<NativeFunctionCallResponse> {
     try {
-      withContext(run.job) {
-        return providerCall.generateWithFunctions(
+      return withContext(run.job) {
+        providerCall.generateWithFunctions(
             prompt = prompt,
             functionDeclarations = functionDeclarations,
             language = "kotlin",

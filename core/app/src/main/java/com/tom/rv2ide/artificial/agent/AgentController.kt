@@ -21,6 +21,9 @@ import com.tom.rv2ide.artificial.agents.AIAgentManager
 import com.tom.rv2ide.artificial.agent.NativeFunctionCallResponse
 import com.tom.rv2ide.artificial.agent.RunCheckpoint
 import com.tom.rv2ide.artificial.parser.SnippetParser
+import com.tom.rv2ide.artificial.session.CompiledContext
+import com.tom.rv2ide.artificial.session.ContextEngine
+import com.tom.rv2ide.artificial.session.SessionManager
 import com.tom.rv2ide.artificial.tools.ConfirmPolicy
 import com.tom.rv2ide.artificial.tools.RunMode
 import com.tom.rv2ide.artificial.tools.ToolCall
@@ -34,13 +37,14 @@ import com.tom.rv2ide.artificial.tools.ToolResult
 import com.tom.rv2ide.artificial.tools.builtins.BoundedWalk
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
- * Owns Phase 1 agent runs: step budget, cancellation, transcript, and the
+ * Owns Phase 1-3 agent runs: step budget, cancellation, transcript, and the
  * model → tool → result loop.
  *
  * Depends on [ProviderCall] for provider calls (unchanged behavior) and on
@@ -51,6 +55,9 @@ import kotlinx.coroutines.withContext
  * [manager] is only used for provider-side modification history and is optional
  * so JVM tests can construct a controller with an injected [ProviderCall];
  * production passes the real manager and behaves exactly as before.
+ *
+ * [sessionManager] and [contextEngine] are optional for Phase 3 integration.
+ * If provided, session history and context assembly are used.
  */
 class AgentController(
     private val manager: AIAgentManager? = null,
@@ -63,7 +70,11 @@ class AgentController(
     private val nativeFunctionCallSource: NativeFunctionCallSource = NativeFunctionCallSource(),
     private val permissionFor: (RunMode) -> ToolPermission = { mode ->
       ToolPermission.buildDefault(planMode = mode == RunMode.PLAN)
-    }
+    },
+    // Phase 3: Optional session and context integration
+    private val sessionManager: SessionManager? = null,
+    private val contextEngine: ContextEngine? = null,
+    private val coroutineScope: CoroutineScope? = null
 ) {
 
   @Volatile
@@ -99,6 +110,7 @@ class AgentController(
    * @param legacyFallback when true (default), legacy `FILE_TO_MODIFY:` replies
    *   are converted into equivalent `local:write_file` calls through the same
    *   safe pipeline instead of the old direct path.
+   * @param sessionId optional session ID for persistence. If provided, sessionManager must be set.
    */
   suspend fun runAgent(
       userRequest: String,
@@ -106,16 +118,28 @@ class AgentController(
       projectRoot: File,
       events: (AgentEvents) -> Unit,
       onConfirm: suspend (ToolCall) -> Boolean,
-      legacyFallback: Boolean = true
+      legacyFallback: Boolean = true,
+      sessionId: String? = null
   ): AgentRun {
+    // Validate session dependencies
+    if (sessionId != null && sessionManager == null) {
+      throw IllegalArgumentException("sessionId provided but sessionManager is not configured")
+    }
+
     // Parent the run job to the caller: UI cancellation then cancels the run
     // automatically, while run.cancel() stays local (SupervisorJob).
-    val run = trackRun(AgentRun(mode = mode, parentJob = currentCoroutineContext()[Job]))
+    val run = trackRun(AgentRun(mode = mode, parentJob = currentCoroutineContext()[Job], sessionId = sessionId))
     events(AgentEvents.RunStarted(run.runId, mode))
     val permission = permissionFor(mode)
     val planMode = mode == RunMode.PLAN
     val snippetParser = SnippetParser()
     val nudge = NudgeState()
+
+    // Persist user message if session is active
+    if (sessionId != null) {
+      sessionManager?.addUserMessage(sessionId, userRequest)
+    }
+
     try {
       run.transitionTo(AgentState.THINKING)
       run.addEntry(EntryRole.USER, userRequest)
@@ -123,13 +147,22 @@ class AgentController(
 
       while (true) {
         run.job.ensureActive()
-        val prompt = buildPrompt(
-            userRequest = userRequest,
-            run = run,
-            permission = permission,
-            planMode = planMode,
-            projectRoot = projectRoot
-        )
+
+        // Phase 3: Use ContextEngine for prompt building if available
+        val prompt = if (contextEngine != null && sessionId != null) {
+          val availableTools = registry.all().filter { it.visible && (!planMode || it.kind == ToolKind.READ) }
+          val compiled = contextEngine.compileContext(run, projectRoot, userRequest, availableTools)
+          buildPromptFromContext(compiled, userRequest, run, planMode, projectRoot)
+        } else {
+          buildPrompt(
+              userRequest = userRequest,
+              run = run,
+              permission = permission,
+              planMode = planMode,
+              projectRoot = projectRoot
+          )
+        }
+
         events(AgentEvents.Thinking("Thinking (step ${run.stepCount + 1})…"))
 
         // Try native function calling first, fall back to text protocol.
@@ -212,6 +245,9 @@ class AgentController(
         if (parsed.calls.isEmpty() && parsed.errors.isNotEmpty()) {
           val detail = parsed.errors.joinToString("; ") { it.message }
           run.addEntry(EntryRole.SYSTEM, "Parse error: $detail")
+          if (sessionId != null) {
+            sessionManager?.addAssistantMessage(sessionId, "Parse error: $detail")
+          }
           if (registerFailureOrStop(run, events, "I could not parse a tool call ($detail). ", nudge)) {
             return run
           }
@@ -245,10 +281,21 @@ class AgentController(
           run.transitionTo(AgentState.FINALIZING)
           run.addEntry(EntryRole.FINAL, replyText.take(MAX_FINAL_CHARS))
           events(AgentEvents.FinalAnswer(replyText, parsed.hasLegacyModifications))
+
+          // Persist final assistant message
+          if (sessionId != null) {
+            sessionManager?.addAssistantMessage(sessionId, replyText)
+          }
+
           run.checkpoint?.release()
           run.transitionTo(AgentState.DONE)
           clearRun(run)
           return run
+        }
+
+        // Persist assistant message with tool calls
+        if (sessionId != null) {
+          sessionManager?.addAssistantMessage(sessionId, replyText, parsed.calls)
         }
 
         // Execute ALL parsed calls sequentially in this turn.
@@ -432,6 +479,12 @@ private suspend fun executeSingleCall(
           "FAILED: ${result.error}"
         }
     )
+
+    // Persist tool result if session is active
+    if (run.sessionId != null && sessionManager != null) {
+      sessionManager.addToolResult(run.sessionId, call, result)
+    }
+
     if (result.ok) {
       run.registerSuccess()
     } else {
@@ -658,5 +711,75 @@ private suspend fun executeSingleCall(
     internal const val MAX_ENTRY_CHARS = 2000
     internal const val MAX_TRANSCRIPT_TURNS = 10
     internal const val MAX_PROMPT_CHARS = 24000
+  }
+
+  /**
+   * Build prompt from compiled context (Phase 3).
+   * Uses ContextEngine's assembled context instead of raw transcript.
+   */
+  private fun buildPromptFromContext(
+      context: CompiledContext,
+      userRequest: String,
+      run: AgentRun,
+      planMode: Boolean,
+      projectRoot: File
+  ): String {
+    val builder = StringBuilder()
+    builder.append(context.systemInstructions).append("\n\n")
+
+    if (context.projectInstructions.isNotBlank()) {
+      builder.append("Project Instructions:\n")
+      builder.append(context.projectInstructions).append("\n\n")
+    }
+
+    // Tool definitions
+    builder.append("Available Tools:\n")
+    builder.append(registry.describeForPrompt(planMode)).append("\n\n")
+
+    // File excerpts
+    if (context.fileExcerpts.isNotEmpty()) {
+      builder.append("Relevant Files:\n")
+      for (excerpt in context.fileExcerpts) {
+        builder.append("--- ${excerpt.path} ---\n")
+        builder.append(excerpt.content).append("\n\n")
+      }
+    }
+
+    // Conversation history
+    if (context.conversationHistory.isNotEmpty()) {
+      builder.append("Conversation History:\n")
+      for (msg in context.conversationHistory) {
+        val label = when (msg.role) {
+          "user" -> "USER"
+          "assistant" -> "ASSISTANT"
+          "tool" -> "TOOL"
+          "system" -> "SYSTEM"
+          else -> msg.role.uppercase()
+        }
+        builder.append("[$label] ").append(msg.content.take(MAX_ENTRY_CHARS)).append("\n")
+        for (tc in msg.toolCalls) {
+          builder.append("  [TOOL_CALL] ${tc.name}(${tc.arguments.joinToString(", ") { "${it.key}=${it.value}" }})\n")
+        }
+        for (tr in msg.toolResults) {
+          builder.append("  [TOOL_RESULT] ${tr.callId}: ${if (tr.success) "OK" else "FAILED"}\n")
+        }
+      }
+      builder.append("\n")
+    }
+
+    // Compaction notice
+    if (context.wasCompacted && context.compactionSummary != null) {
+      builder.append("[Context was compacted: ${context.compactionSummary}]\n\n")
+    }
+
+    // Current user request
+    builder.append("Current user request: ").append(userRequest.take(2000)).append("\n")
+
+    var prompt = builder.toString()
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      prompt = prompt.take(MAX_PROMPT_CHARS) +
+          "\n…[prompt trimmed to $MAX_PROMPT_CHARS chars]"
+    }
+    return prompt
   }
 }

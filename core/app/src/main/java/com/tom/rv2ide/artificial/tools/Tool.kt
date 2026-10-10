@@ -19,6 +19,7 @@ package com.tom.rv2ide.artificial.tools
 
 import java.io.File
 import kotlinx.coroutines.Job
+import kotlinx.serialization.Serializable
 
 /**
  * Phase 1 agent runtime contracts.
@@ -28,6 +29,7 @@ import kotlinx.coroutines.Job
  */
 
 /** What mode an agent run operates in. Mirrors the chat UI mode 1:1. */
+@Serializable
 enum class RunMode {
   BUILD,
   PLAN

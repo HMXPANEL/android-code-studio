@@ -51,7 +51,8 @@ class AgentRun(
     val runId: String = UUID.randomUUID().toString(),
     val mode: RunMode,
     val budget: RunBudget = RunBudget(),
-    parentJob: Job? = null
+    parentJob: Job? = null,
+    val sessionId: String? = null
 ) {
 
   val job: Job = SupervisorJob(parentJob)

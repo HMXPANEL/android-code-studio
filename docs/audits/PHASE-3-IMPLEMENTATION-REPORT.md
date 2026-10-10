@@ -157,12 +157,22 @@ load; no new services/daemons.
 
 | Group | Command | Tests | Outcome |
 |-------|---------|-------|---------|
-| Session store | `:core:app:testDebugUnitTest --tests "*session*"` | 6 (file + memory CRUD, messages, tool pairs) | written; CI authoritative |
-| Context engine | same | 3 (new-session, history w/ pairs, estimator) | written; CI authoritative |
-| Indexer | same | 6 (build, cache, refresh, invalidate, stats, excludes) | written; CI authoritative |
-| Relevance | same | 5 (name, content, history, limit, cache) | written; CI authoritative |
-| Manager | same | 10 (lifecycle, messages, tool result+status, checkpoint, observe) | written; CI authoritative |
-| Phase 1/2 regression | full `testDebugUnitTest` | 119 | base green (run 37971690954); rerun via CI after push |
+| Session store | `:core:app:testDebugUnitTest --tests "*session*"` | 6 (file + memory CRUD, messages, tool pairs) | ✅ pass (CI run 38071562097) |
+| Context engine | same | 3 (new-session, history w/ pairs, estimator) | ✅ pass |
+| Indexer | same | 6 (build, cache, refresh, invalidate, stats, excludes) | ✅ pass |
+| Relevance | same | 5 (name, content, history, limit, cache) | ✅ pass |
+| Manager | same | 10 (lifecycle, messages, tool result+status, checkpoint, observe) | ✅ pass |
+| Phase 1/2 regression | full `testDebugUnitTest` | 119 | ✅ pass (no regressions) |
+| **Total** | | **149** | **✅ 0 failures (log shows zero FAILED lines)** |
+
+CI failure history during Phase 3 (all fixed, root-caused):
+1. `??` instead of `?:` in `SessionStore.copyWith` → kapt failure. Fixed in `af98f19`.
+2. `Map.joinToString` (must be `entries.joinToString`) + nullable `AgentSession` flow
+   in `ContextEngine` → compile errors. Fixed in `0e068f6`.
+3. `FakeProviderCall` recorded a prompt on the failed native attempt, doubling the
+   prompt count for text-fallback turns → 1 characterization test failed
+   (`prompts.single()`). Fixed by recording only successful native calls in `8255edd`.
+   148/149 → 149/149.
 
 Local `./gradlew` execution is unavailable in this environment (no exec permission on the
 sdcard mount + Java 25 vs old Kotlin toolchain); per repo policy GitHub Actions is the
@@ -174,17 +184,26 @@ file-restore unit path.
 
 ## E. Build and CI
 
-- Debug/Release builds: via GitHub Actions (authoritative). Local builds not attempted
-  per environment constraints and repo policy.
-- Runs: base `37971690954` (commit `a13005a`) = success. New run ID for Phase 3 push
-  recorded after push below.
-- No workflow skipped by us; any skip/cancel will be reported verbatim, not as green.
+- Debug build: ✅ `assembleDebug` BUILD SUCCESSFUL (CI run 38071562097).
+- Release build: ✅ `assembleRelease` BUILD SUCCESSFUL (same run).
+- Unit tests: ✅ `testDebugUnitTest` green, 149 tests, 0 failures.
+- Run: **38071562097** — status `completed`, conclusion `success` (head `8255edd`).
+  Prior Phase 3 runs failed for the three fixed defects above (runs 38069110853,
+  38070081992, 38070706574); each failure was root-caused from logs and fixed.
+- Base (pre-Phase 3): run 37971690954 success on `a13005a`.
+- No workflow skipped or cancelled; nothing reported green without evidence.
 
 ## F. Git
 
 - Branch: `main`. Starting commit: `a13005a`.
-- New commits: (to be filled at push time).
-- Push status: (to be filled at push time).
+- New commits:
+  - `ce6afc5` phase3: session storage, context engine, indexing, relevance + 30 tests
+  - `c17e759` phase3: Phase 1/2 audit + Phase 3 report (initial)
+  - `af98f19` phase3: fix `?:` operator
+  - `0e068f6` phase3: fix Map rendering + nullable session
+  - `8255edd` phase3: fix FakeProviderCall prompt double-count
+- Push status: all pushed to `origin/main`; remote HEAD = `8255edd` (code), report
+  update follows as final commit.
 - Files changed:
   - `core/.../artificial/session/SessionStore.kt` (new)
   - `core/.../artificial/session/ContextEngine.kt` (new)
@@ -201,9 +220,10 @@ file-restore unit path.
 ## G. Known limitations
 
 - **Verified complete:** session CRUD/persistence shape, context assembly + budget + compaction,
-  bounded indexing, relevance ranking, agent-loop integration preserving Phase 1/2 behavior.
-- **Implemented but not independently runtime-verified (pending CI):** new unit suites
-  (30 tests) — written against real contracts, awaiting Actions run.
+  bounded indexing, relevance ranking, agent-loop integration preserving Phase 1/2 behavior —
+  all covered by CI-green tests (149/149).
+- **Implemented but not independently runtime-verified:** live provider round-trips
+  (no API keys in CI); process-death recovery beyond file-restore unit path.
 - **Partially implemented:** OpenAI/Anthropic native-FC adapters (pre-existing stubs);
   nested tool schemas (pre-existing flat-only).
 - **Not implemented:** parallel read-only dispatch, streaming, PTY, subagents/MCP/skills

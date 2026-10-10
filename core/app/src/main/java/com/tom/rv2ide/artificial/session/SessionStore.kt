@@ -56,11 +56,11 @@ data class AgentSession(
         updatedAt: Long = System.currentTimeMillis()
     ): AgentSession {
         return copy(
-            title = title ?? this.title,
-            messages = messages ?? this.messages,
-            toolCalls = toolCalls ?? this.toolCalls,
-            checkpoints = checkpoints ?? this.checkpoints,
-            metadata = metadata ?? this.metadata,
+            title = title ?: this.title,
+            messages = messages ?: this.messages,
+            toolCalls = toolCalls ?: this.toolCalls,
+            checkpoints = checkpoints ?: this.checkpoints,
+            metadata = metadata ?: this.metadata,
             updatedAt = updatedAt
         )
     }

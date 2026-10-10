@@ -128,7 +128,10 @@ class ContextEngine(
         projectInstructions: String? = null
     ): CompiledContext {
         val sessionId = run.sessionId
-        val session = if (sessionId != null) sessionStore.getWithHistory(sessionId) else null
+        if (sessionId == null) {
+            return emptyContext(projectRoot, userRequest, availableTools, systemInstructions, projectInstructions)
+        }
+        val session = sessionStore.getWithHistory(sessionId)
             ?: return emptyContext(projectRoot, userRequest, availableTools, systemInstructions, projectInstructions)
 
         // 1. Build tool definitions

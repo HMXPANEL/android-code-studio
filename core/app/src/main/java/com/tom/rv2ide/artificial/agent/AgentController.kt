@@ -758,7 +758,7 @@ private suspend fun executeSingleCall(
         }
         builder.append("[$label] ").append(msg.content.take(MAX_ENTRY_CHARS)).append("\n")
         for (tc in msg.toolCalls) {
-          builder.append("  [TOOL_CALL] ${tc.name}(${tc.arguments.joinToString(", ") { "${it.key}=${it.value}" }})\n")
+          builder.append("  [TOOL_CALL] ${tc.name}(${tc.arguments.entries.joinToString(", ") { "${it.key}=${it.value}" }})\n")
         }
         for (tr in msg.toolResults) {
           builder.append("  [TOOL_RESULT] ${tr.callId}: ${if (tr.success) "OK" else "FAILED"}\n")

@@ -1,8 +1,5 @@
 package com.tom.rv2ide.artificial.agent
 
-import com.tom.rv2ide.artificial.agent.NativeFunctionCallResponse
-import com.tom.rv2ide.artificial.agent.NativeFunctionCall
-
 /**
  * Deterministic [ProviderCall] double for [AgentController] JVM tests.
  *
@@ -45,11 +42,13 @@ class FakeProviderCall(
       language: String,
       projectStructure: String?
   ): Result<NativeFunctionCallResponse> {
-    prompts.add(prompt)
+    // No prompt recorded on fallback: an empty native queue means "unsupported",
+    // so the controller falls back to generateCode(), which records the turn.
+    // Recording here too would double-count one model turn as two prompts.
     if (nativeQueue.isEmpty()) {
-      exhausted = true
       return Result.failure(IllegalStateException("FakeProviderCall: no native replies left"))
     }
+    prompts.add(prompt)
     return Result.success(nativeQueue.removeAt(0))
   }
 

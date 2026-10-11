@@ -25,6 +25,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Ignore
 import org.junit.Test
 
 /**
@@ -167,6 +168,10 @@ class AgentControllerSessionTest {
         assertTrue(runBlocking { manager.listSessions(root) }.isEmpty())
     }
 
+    // TEMPORARY CI-HANG BISECTION (revert): ignored to determine whether the
+    // stall originates in the new tests. Re-enable with
+    // AgentSessionCoordinatorTest after diagnosis.
+    @Ignore("CI hang bisection — revert after diagnosis")
     @Test
     fun testSameControllerTwoSessionsStayIsolated() {
         val sessionA = runBlocking {

@@ -34,6 +34,9 @@ import com.tom.rv2ide.artificial.agent.AgentEvents
 import com.tom.rv2ide.artificial.agents.AIAgentManager
 import com.tom.rv2ide.artificial.agents.Agents
 import com.tom.rv2ide.artificial.dialogs.AIPermissionDialog
+import com.tom.rv2ide.artificial.session.AgentSessionCoordinator
+import com.tom.rv2ide.artificial.session.MessageRole
+import com.tom.rv2ide.artificial.session.PersistedMessage
 import com.tom.rv2ide.artificial.tools.RunMode
 import com.tom.rv2ide.artificial.tools.ToolCall
 import com.tom.rv2ide.artificial.tools.builtins.AgentTools
@@ -44,9 +47,11 @@ import com.tom.rv2ide.utils.EditorSidebarActions
 import com.tom.rv2ide.utils.ProjectHelper.getProjectRoot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -103,6 +108,14 @@ class ArtificialFragment(
     private var isSettingUpCompletion = false
 
     private var agentController: AgentController? = null
+
+    /**
+     * Phase 3 session wiring. One coordinator per open project; it owns the
+     * SessionManager/ContextEngine and the current conversation ID. Null when
+     * no project is open or persistence is unavailable — the agent then runs
+     * exactly as before (no session).
+     */
+    private var sessionCoordinator: AgentSessionCoordinator? = null
 
     /** Phase 1 agent loop entry. Default OFF: legacy one-shot path stays default. */
     private fun isAgentLoopEnabled(): Boolean {
@@ -270,13 +283,18 @@ class ArtificialFragment(
     private fun showHeaderMenu(anchor: View) {
         val popup = PopupMenu(requireContext(), anchor)
         popup.menu.add(0, MENU_HISTORY, 1, getString(R.string.ai_chat_menu_history))
-        popup.menu.add(0, MENU_SETTINGS, 2, getString(R.string.ai_chat_menu_settings))
-        popup.menu.add(0, MENU_UNDO, 3, getString(R.string.ai_chat_menu_undo))
-        popup.menu.add(0, MENU_CLEAR, 4, getString(R.string.ai_chat_menu_clear))
+        popup.menu.add(0, MENU_SESSIONS, 2, getString(R.string.ai_chat_menu_sessions))
+        popup.menu.add(0, MENU_SETTINGS, 3, getString(R.string.ai_chat_menu_settings))
+        popup.menu.add(0, MENU_UNDO, 4, getString(R.string.ai_chat_menu_undo))
+        popup.menu.add(0, MENU_CLEAR, 5, getString(R.string.ai_chat_menu_clear))
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 MENU_HISTORY -> {
                     openHistory()
+                    true
+                }
+                MENU_SESSIONS -> {
+                    showSessionsDialog()
                     true
                 }
                 MENU_SETTINGS -> {
@@ -321,6 +339,262 @@ class ArtificialFragment(
 
     private fun openHistory() {
         showOverlay(AIHistoryFragment.newInstance(aiAgent), "ai_history")
+    }
+
+    // --------------------------------------------------------------------------
+    // Phase 3 persistent conversations (SessionManager + ContextEngine).
+    // --------------------------------------------------------------------------
+
+    /**
+     * Returns the coordinator for the currently open project, creating it on
+     * first use. Construction runs on Dispatchers.IO because FileSessionStore
+     * reads the session directory in its constructor. Null when no project is
+     * open or persistence cannot start — callers then run session-free.
+     */
+    private suspend fun ensureSessionCoordinator(): AgentSessionCoordinator? {
+        if (userRootProject.isBlank()) return null
+        val root = try {
+            File(userRootProject)
+        } catch (e: Exception) {
+            return null
+        }
+        val existing = sessionCoordinator
+        if (existing != null) {
+            val same = try {
+                existing.projectRoot.canonicalPath == root.canonicalPath
+            } catch (e: Exception) {
+                existing.projectRoot.absolutePath == root.absolutePath
+            }
+            if (same) return existing
+        }
+        return try {
+            withContext(Dispatchers.IO) {
+                val prefKey = KEY_SESSION_ID + root.absolutePath.hashCode()
+                AgentSessionCoordinator(
+                    projectRoot = root,
+                    scope = lifecycleScope,
+                    loadCurrentId = {
+                        try {
+                            requireContext()
+                                .getSharedPreferences(PREFS_CHAT, Context.MODE_PRIVATE)
+                                .getString(prefKey, null)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    },
+                    saveCurrentId = { id ->
+                        try {
+                            requireContext()
+                                .getSharedPreferences(PREFS_CHAT, Context.MODE_PRIVATE)
+                                .edit()
+                                .putString(prefKey, id)
+                                .apply()
+                        } catch (e: Exception) {
+                            // Best effort only.
+                        }
+                    }
+                )
+            }.also { sessionCoordinator = it }
+        } catch (e: Exception) {
+            sessionCoordinator = null
+            null
+        }
+    }
+
+    private fun showSessionsDialog() {
+        if (userRootProject.isBlank()) {
+            showSnackbar("Project path not set")
+            return
+        }
+        lifecycleScope.launch {
+            val coordinator = try {
+                ensureSessionCoordinator()
+            } catch (e: Exception) {
+                null
+            }
+            if (coordinator == null) {
+                showSnackbar(getString(R.string.ai_chat_session_unavailable))
+                return@launch
+            }
+            val sessions = try {
+                coordinator.listSessions()
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (!isAdded) return@launch
+            if (sessions.isEmpty()) {
+                showSnackbar(getString(R.string.ai_chat_sessions_empty))
+                return@launch
+            }
+            val currentId = coordinator.currentSessionId
+            val titles = sessions.map { session ->
+                val whenText = try {
+                    java.text.SimpleDateFormat(
+                        "MMM d, HH:mm", java.util.Locale.US
+                    ).format(java.util.Date(session.updatedAt))
+                } catch (e: Exception) {
+                    ""
+                }
+                val marker = if (session.id == currentId) "● " else ""
+                "$marker${session.title} ($whenText)"
+            }.toTypedArray()
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                .setTitle(getString(R.string.ai_chat_sessions_title))
+                .setItems(titles) { _, which ->
+                    sessions.getOrNull(which)?.let { resumeSession(it.id) }
+                }
+                .setPositiveButton(getString(R.string.ai_chat_session_new)) { _, _ ->
+                    clearConversation()
+                }
+                .setNeutralButton(getString(R.string.ai_chat_session_manage)) { _, _ ->
+                    showManageSessionsDialog(sessions.map { it.id to it.title })
+                }
+                .show()
+        }
+    }
+
+    private fun showManageSessionsDialog(entries: List<Pair<String, String>>) {
+        var selected = 0
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+            .setTitle(getString(R.string.ai_chat_session_manage))
+            .setSingleChoiceItems(entries.map { it.second }.toTypedArray(), 0) { _, which ->
+                selected = which
+            }
+            .setPositiveButton(getString(R.string.ai_chat_session_rename)) { _, _ ->
+                entries.getOrNull(selected)?.let { showRenameSessionDialog(it.first, it.second) }
+            }
+            .setNegativeButton(getString(R.string.ai_chat_session_delete)) { _, _ ->
+                entries.getOrNull(selected)?.let { confirmDeleteSession(it.first, it.second) }
+            }
+            .show()
+    }
+
+    private fun showRenameSessionDialog(id: String, currentTitle: String) {
+        val input = android.widget.EditText(requireContext()).apply {
+            setText(currentTitle)
+            selectAll()
+        }
+        val container = android.widget.FrameLayout(requireContext()).apply {
+            val margin = (20 * resources.displayMetrics.density).toInt()
+            setPadding(margin, margin / 2, margin, 0)
+            addView(input)
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+            .setTitle(getString(R.string.ai_chat_session_rename))
+            .setView(container)
+            .setPositiveButton(getString(R.string.ai_chat_session_rename)) { _, _ ->
+                val name = input.text?.toString()?.trim().orEmpty()
+                if (name.isBlank()) return@setPositiveButton
+                lifecycleScope.launch {
+                    val ok = try {
+                        sessionCoordinator?.renameSession(id, name)
+                    } catch (e: Exception) {
+                        false
+                    } == true
+                    showSnackbar(
+                        getString(
+                            if (ok) R.string.ai_chat_session_renamed
+                            else R.string.ai_chat_session_open_failed
+                        )
+                    )
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmDeleteSession(id: String, title: String) {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+            .setTitle(title)
+            .setMessage(getString(R.string.ai_chat_session_delete_confirm))
+            .setPositiveButton(getString(R.string.ai_chat_session_delete)) { _, _ ->
+                deleteSession(id)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun deleteSession(id: String) {
+        // Never let a late response land in a conversation being removed.
+        agentController?.cancelActiveRun()
+        executionJob?.cancel()
+        lifecycleScope.launch {
+            val coordinator = try {
+                ensureSessionCoordinator()
+            } catch (e: Exception) {
+                null
+            }
+            val wasCurrent = coordinator?.currentSessionId == id
+            val deleted = try {
+                coordinator?.deleteSession(id)
+            } catch (e: Exception) {
+                false
+            } == true
+            if (!isAdded) return@launch
+            if (deleted) {
+                if (wasCurrent) {
+                    viewModel.clearMessages()
+                    try {
+                        aiAgent.clearConversation()
+                    } catch (e: Exception) {
+                        // Best effort only.
+                    }
+                }
+                showSnackbar(getString(R.string.ai_chat_session_deleted))
+            } else {
+                showSnackbar(getString(R.string.ai_chat_session_open_failed))
+            }
+        }
+    }
+
+    private fun resumeSession(id: String) {
+        // Cancel first so a late response from the previous conversation can
+        // never render into (or persist into) the resumed one: every run
+        // carries its own sessionId.
+        agentController?.cancelActiveRun()
+        executionJob?.cancel()
+        viewModel.setWorking(false)
+        viewModel.setRunStatus(null)
+        sendBtn.isEnabled = true
+        lifecycleScope.launch {
+            val coordinator = try {
+                ensureSessionCoordinator()
+            } catch (e: Exception) {
+                null
+            }
+            val session = try {
+                if (coordinator?.switchTo(id) == true) coordinator.history(id) else null
+            } catch (e: Exception) {
+                null
+            }
+            if (!isAdded) return@launch
+            if (session == null) {
+                showSnackbar(getString(R.string.ai_chat_session_open_failed))
+                return@launch
+            }
+            viewModel.clearMessages()
+            session.messages.forEach { replayPersistedMessage(it) }
+        }
+    }
+
+    /** Replays stored turns into chat bubbles (display only; fidelity stays in the store). */
+    private fun replayPersistedMessage(message: PersistedMessage) {
+        when (message.role) {
+            MessageRole.USER -> viewModel.addUserMessage(message.content)
+            MessageRole.ASSISTANT -> {
+                // Hide the TOOL_CALL: protocol lines; the text answer is what matters.
+                val text = message.content.lines()
+                    .filterNot { it.trimStart().startsWith("TOOL_CALL:") }
+                    .joinToString("\n")
+                    .trim()
+                    .ifBlank { getString(R.string.ai_chat_session_tool_turn) }
+                val index = viewModel.startWorkingMessage("")
+                viewModel.finalizeWorkingMessage(index, text)
+            }
+            else -> {
+                // TOOL/SYSTEM rows remain available in the session record only.
+            }
+        }
     }
 
     private fun showOverlay(fragment: Fragment, backStackName: String) {
@@ -493,19 +767,50 @@ class ArtificialFragment(
             val workingIndex = viewModel.startWorkingMessage(getString(R.string.ai_chat_working))
             try {
                 AgentTools.registerAll(requireContext().applicationContext)
-                val controller = agentController
-                    ?: AgentController(aiAgent).also { agentController = it }
+                // Phase 3: wire the session store + context engine when a
+                // project is open. A fresh controller per run keeps the wiring
+                // in sync with the current conversation; the previous run was
+                // already cancelled by sendCurrentInput().
+                val coordinator = try {
+                    ensureSessionCoordinator()
+                } catch (e: Exception) {
+                    null
+                }
+                val controller = AgentController(
+                    aiAgent,
+                    sessionManager = coordinator?.sessionManager,
+                    contextEngine = coordinator?.contextEngine
+                ).also { agentController = it }
                 val mode = if (uiMode == AIAgentViewModel.AgentMode.PLAN) {
                     RunMode.PLAN
                 } else {
                     RunMode.BUILD
+                }
+                val providerId = try {
+                    aiAgent.getCurrentProviderName()
+                } catch (e: Exception) {
+                    "unknown"
+                }
+                val modelId = try {
+                    aiAgent.getCurrentModelName()
+                } catch (e: Exception) {
+                    "unknown"
+                }
+                val sessionId = try {
+                    coordinator?.sessionIdFor(mode, providerId, modelId)
+                } catch (e: Exception) {
+                    null
+                }
+                if (sessionId == null && coordinator?.lastError != null) {
+                    showSnackbar(getString(R.string.ai_chat_session_unavailable))
                 }
                 controller.runAgent(
                     userRequest = userRequest,
                     mode = mode,
                     projectRoot = File(userRootProject),
                     events = { event -> onAgentEvent(event, workingIndex) },
-                    onConfirm = { call -> askToolApproval(call) }
+                    onConfirm = { call -> askToolApproval(call) },
+                    sessionId = sessionId
                 )
             } catch (e: CancellationException) {
                 android.util.Log.d(
@@ -820,6 +1125,14 @@ class ArtificialFragment(
                 if (::chatInput.isInitialized) chatInput.text?.clear()
                 viewModel.setPendingAttachment(null)
                 viewModel.clearMessages()
+                // A cleared conversation is a new conversation: drop the
+                // session pointer so the next message starts fresh history
+                // instead of appending to the cleared one.
+                try {
+                    sessionCoordinator?.forgetCurrent()
+                } catch (e: Exception) {
+                    // UI is already cleared; persistence rotation is best effort.
+                }
                 showSnackbar(getString(R.string.ai_chat_cleared))
             } catch (e: Exception) {
                 showSnackbar("Error clearing: ${e.message}")
@@ -1092,7 +1405,10 @@ class ArtificialFragment(
         private const val KEY_AGENT_MODE = "agent_mode"
         private const val KEY_LOOP_ENABLED = "agent_loop_enabled"
         private const val KEY_CONTENT_VISIBILITY = "content_visibility"
+        /** Per-project current conversation ID (value) under PREFS_CHAT. */
+        private const val KEY_SESSION_ID = "agent_session_id_"
         private const val MENU_HISTORY = 1
+        private const val MENU_SESSIONS = 5
         private const val MENU_SETTINGS = 2
         private const val MENU_UNDO = 3
         private const val MENU_CLEAR = 4

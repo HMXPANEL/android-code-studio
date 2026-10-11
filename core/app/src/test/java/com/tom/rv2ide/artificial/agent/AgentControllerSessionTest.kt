@@ -168,6 +168,74 @@ class AgentControllerSessionTest {
     }
 
     @Test
+    fun testSameControllerTwoSessionsStayIsolated() {
+        val sessionA = runBlocking {
+            manager.createSession(root, RunMode.BUILD, "p", "m", "A")
+        }
+        val sessionB = runBlocking {
+            manager.createSession(root, RunMode.BUILD, "p", "m", "B")
+        }
+        // One shared controller, sequential runs: the second run must not see
+        // the first run's conversation, and each store history stays separate.
+        val fake = FakeProviderCall(
+            listOf(
+                "TOOL_CALL: test:sess_echo {\"tag\":\"a\"}",
+                "Answer Alpha marker-alpha.",
+                "TOOL_CALL: test:sess_echo {\"tag\":\"b\"}",
+                "Answer Beta."
+            )
+        )
+        val c = AgentController(
+            providerCall = fake,
+            sessionManager = manager,
+            contextEngine = engine
+        )
+        var run1: AgentRun? = null
+        var run2: AgentRun? = null
+        try {
+            runBlocking {
+                try {
+                    run1 = c.runAgent(
+                        userRequest = "alpha question",
+                        mode = RunMode.BUILD,
+                        projectRoot = root,
+                        events = {},
+                        onConfirm = { true },
+                        sessionId = sessionA.id
+                    )
+                    run2 = c.runAgent(
+                        userRequest = "beta question",
+                        mode = RunMode.BUILD,
+                        projectRoot = root,
+                        events = {},
+                        onConfirm = { true },
+                        sessionId = sessionB.id
+                    )
+                } finally {
+                    (run2 ?: run1 ?: c.activeRun)?.job?.cancel()
+                }
+            }
+        } catch (t: Throwable) {
+            if (t !is CancellationException) throw t
+        }
+        assertEquals(AgentState.DONE, run1!!.state)
+        assertEquals(AgentState.DONE, run2!!.state)
+
+        // The beta prompt (3rd provider call) must not contain alpha history.
+        assertEquals(4, fake.prompts.size)
+        assertFalse(fake.prompts[2].contains("marker-alpha"))
+        assertFalse(fake.prompts[2].contains("alpha question"))
+        assertTrue(fake.prompts[2].contains("beta question"))
+
+        val historyA = runBlocking { manager.getSession(sessionA.id) }!!
+        val historyB = runBlocking { manager.getSession(sessionB.id) }!!
+        assertTrue(historyA.messages.any { it.content.contains("alpha question") })
+        assertFalse(historyA.messages.any { it.content.contains("beta question") })
+        assertTrue(historyB.messages.any { it.content.contains("beta question") })
+        assertFalse(historyB.messages.any { it.content.contains("marker-alpha") })
+    }
+
+    @Test
     fun testSessionIdWithoutManagerFailsFast() {
         val c = AgentController(providerCall = FakeProviderCall(listOf("x")))
         try {

@@ -73,6 +73,7 @@
   <string name="ai_chat_mode_build">Build</string>
   <string name="ai_chat_mode_plan">Plan</string>
   <string name="ai_chat_menu_history">History</string>
+  <string name="ai_chat_menu_sessions">Conversations</string>
   <string name="ai_chat_menu_settings">AI settings</string>
   <string name="ai_chat_menu_undo">Undo last change</string>
   <string name="ai_chat_menu_clear">Clear conversation</string>
@@ -80,6 +81,18 @@
   <string name="ai_chat_undo_done">Last modification undone</string>
   <string name="ai_chat_undo_empty">Nothing to undo</string>
   <string name="ai_chat_cleared">Conversation cleared</string>
+  <string name="ai_chat_sessions_title">Conversations</string>
+  <string name="ai_chat_sessions_empty">No saved conversations yet</string>
+  <string name="ai_chat_session_new">New</string>
+  <string name="ai_chat_session_manage">Manage</string>
+  <string name="ai_chat_session_rename">Rename</string>
+  <string name="ai_chat_session_renamed">Conversation renamed</string>
+  <string name="ai_chat_session_delete">Delete</string>
+  <string name="ai_chat_session_delete_confirm">Delete this conversation? Its saved history will be removed. This cannot be undone.</string>
+  <string name="ai_chat_session_deleted">Conversation deleted</string>
+  <string name="ai_chat_session_open_failed">Could not open conversation</string>
+  <string name="ai_chat_session_unavailable">Session saving unavailable — continuing without saving</string>
+  <string name="ai_chat_session_tool_turn">(Earlier tool activity — full details in the saved session)</string>
   <string name="ai_chat_empty_request">Please enter a request</string>
   <string name="ai_chat_working">AI is working…</string>
   <string name="ai_chat_failed_to_load_project">Failed to load project</string>

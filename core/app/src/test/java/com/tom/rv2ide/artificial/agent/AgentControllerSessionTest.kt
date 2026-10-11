@@ -25,7 +25,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Test
 
 /**
@@ -168,69 +167,45 @@ class AgentControllerSessionTest {
         assertTrue(runBlocking { manager.listSessions(root) }.isEmpty())
     }
 
-    // TEMPORARY CI-HANG BISECTION (revert): ignored to determine whether the
-    // stall originates in the new tests. Re-enable with
-    // AgentSessionCoordinatorTest after diagnosis.
-    @Ignore("CI hang bisection — revert after diagnosis")
+    /**
+     * Two runs sharing one store stay isolated. Mirrors production, where
+     * ArtificialFragment builds a fresh controller per run: each run must see
+     * only its own session, and each store history must stay separate.
+     */
     @Test
-    fun testSameControllerTwoSessionsStayIsolated() {
+    fun testTwoRunsSharingOneStoreStayIsolated() {
         val sessionA = runBlocking {
             manager.createSession(root, RunMode.BUILD, "p", "m", "A")
         }
         val sessionB = runBlocking {
             manager.createSession(root, RunMode.BUILD, "p", "m", "B")
         }
-        // One shared controller, sequential runs: the second run must not see
-        // the first run's conversation, and each store history stays separate.
-        val fake = FakeProviderCall(
-            listOf(
-                "TOOL_CALL: test:sess_echo {\"tag\":\"a\"}",
-                "Answer Alpha marker-alpha.",
-                "TOOL_CALL: test:sess_echo {\"tag\":\"b\"}",
-                "Answer Beta."
-            )
+        val fakeA = FakeProviderCall(
+            listOf("TOOL_CALL: test:sess_echo {\"tag\":\"a\"}", "Answer Alpha marker-alpha.")
         )
-        val c = AgentController(
-            providerCall = fake,
-            sessionManager = manager,
-            contextEngine = engine
+        val fakeB = FakeProviderCall(
+            listOf("TOOL_CALL: test:sess_echo {\"tag\":\"b\"}", "Answer Beta.")
         )
-        var run1: AgentRun? = null
-        var run2: AgentRun? = null
-        try {
-            runBlocking {
-                try {
-                    run1 = c.runAgent(
-                        userRequest = "alpha question",
-                        mode = RunMode.BUILD,
-                        projectRoot = root,
-                        events = {},
-                        onConfirm = { true },
-                        sessionId = sessionA.id
-                    )
-                    run2 = c.runAgent(
-                        userRequest = "beta question",
-                        mode = RunMode.BUILD,
-                        projectRoot = root,
-                        events = {},
-                        onConfirm = { true },
-                        sessionId = sessionB.id
-                    )
-                } finally {
-                    (run2 ?: run1 ?: c.activeRun)?.job?.cancel()
-                }
-            }
-        } catch (t: Throwable) {
-            if (t !is CancellationException) throw t
-        }
-        assertEquals(AgentState.DONE, run1!!.state)
-        assertEquals(AgentState.DONE, run2!!.state)
 
-        // The beta prompt (3rd provider call) must not contain alpha history.
-        assertEquals(4, fake.prompts.size)
-        assertFalse(fake.prompts[2].contains("marker-alpha"))
-        assertFalse(fake.prompts[2].contains("alpha question"))
-        assertTrue(fake.prompts[2].contains("beta question"))
+        val run1 = runToEnd(
+            AgentController(providerCall = fakeA, sessionManager = manager, contextEngine = engine),
+            "alpha question",
+            sessionA.id
+        )
+        val run2 = runToEnd(
+            AgentController(providerCall = fakeB, sessionManager = manager, contextEngine = engine),
+            "beta question",
+            sessionB.id
+        )
+        assertEquals(AgentState.DONE, run1.state)
+        assertEquals(AgentState.DONE, run2.state)
+
+        // The beta run's prompt must not contain alpha history.
+        assertEquals(2, fakeA.prompts.size)
+        val betaPrompt = fakeB.prompts.first()
+        assertFalse(betaPrompt.contains("marker-alpha"))
+        assertFalse(betaPrompt.contains("alpha question"))
+        assertTrue(betaPrompt.contains("beta question"))
 
         val historyA = runBlocking { manager.getSession(sessionA.id) }!!
         val historyB = runBlocking { manager.getSession(sessionB.id) }!!
@@ -238,6 +213,34 @@ class AgentControllerSessionTest {
         assertFalse(historyA.messages.any { it.content.contains("beta question") })
         assertTrue(historyB.messages.any { it.content.contains("beta question") })
         assertFalse(historyB.messages.any { it.content.contains("marker-alpha") })
+    }
+
+    /** Runs one full turn on a caller-supplied controller (caller keeps its fake). */
+    private fun runToEnd(
+        controller: AgentController,
+        request: String,
+        sessionId: String?
+    ): AgentRun {
+        var captured: AgentRun? = null
+        try {
+            runBlocking {
+                try {
+                    controller.runAgent(
+                        userRequest = request,
+                        mode = RunMode.BUILD,
+                        projectRoot = root,
+                        events = {},
+                        onConfirm = { true },
+                        sessionId = sessionId
+                    ).also { captured = it }
+                } finally {
+                    (captured ?: controller.activeRun)?.job?.cancel()
+                }
+            }
+        } catch (t: Throwable) {
+            if (t !is CancellationException) throw t
+        }
+        return requireNotNull(captured) { "runAgent never completed" }
     }
 
     @Test

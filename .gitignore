@@ -110,3 +110,8 @@ build.log
 
 external/logwire/build
 external/atc/build
+
+# Agent session storage (Phase 3): per-project conversation history must
+# never be committed accidentally.
+/.opencode/
+.opencode/

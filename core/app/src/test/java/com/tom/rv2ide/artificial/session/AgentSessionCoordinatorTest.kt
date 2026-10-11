@@ -11,16 +11,12 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Test
 
-// TEMPORARY CI-HANG BISECTION (revert): class ignored to determine whether the
-// testDebugUnitTest stall originates in these 7 new tests or elsewhere.
 //
 // Tests for [AgentSessionCoordinator]: one session per conversation, stable
 // reuse across messages, explicit switching without cross-contamination, and
 // visible (non-throwing) storage failures.
-@Ignore("CI hang bisection — revert after diagnosis")
 class AgentSessionCoordinatorTest {
 
     private lateinit var root: File

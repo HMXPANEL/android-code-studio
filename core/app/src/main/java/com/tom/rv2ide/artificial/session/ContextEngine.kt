@@ -111,7 +111,7 @@ class ContextEngine(
     private val sessionStore: SessionStore,
     private val projectIndexer: ProjectIndexer,
     private val relevanceEngine: RelevanceEngine,
-    private val config: ContextConfig = ContextConfig()
+    val config: ContextConfig = ContextConfig()
 ) {
 
     private val tokenEstimator = TokenEstimator()
@@ -125,8 +125,10 @@ class ContextEngine(
         userRequest: String,
         availableTools: List<Tool>,
         systemInstructions: String? = null,
-        projectInstructions: String? = null
+        projectInstructions: String? = null,
+        contextConfig: ContextConfig? = null
     ): CompiledContext {
+        val cfg = contextConfig ?: config
         val sessionId = run.sessionId
         if (sessionId == null) {
             return emptyContext(projectRoot, userRequest, availableTools, systemInstructions, projectInstructions)
@@ -144,7 +146,7 @@ class ContextEngine(
                     projectRoot = projectRoot,
                     query = userRequest,
                     sessionHistory = session.messages.map { it.content }.joinToString("\n"),
-                    maxFiles = config.maxFileExcerpts
+                    maxFiles = cfg.maxFileExcerpts
                 )
             } catch (e: Exception) {
                 emptyList()
@@ -152,7 +154,7 @@ class ContextEngine(
         } else emptyList()
 
         // 3. Build conversation history with priority
-        val history = buildConversationHistory(session)
+        val history = buildConversationHistory(session, cfg)
 
         // 4. Estimate tokens and compact if needed
         var compiled = CompiledContext(
@@ -168,8 +170,8 @@ class ContextEngine(
         compiled = compiled.copy(estimatedTokens = estimateTokens(compiled))
 
         // 5. Compact if over budget
-        if (compiled.estimatedTokens > config.dynamicTokenBudget && config.enableCompaction) {
-            compiled = compactContext(compiled)
+        if (compiled.estimatedTokens > cfg.dynamicTokenBudget && cfg.enableCompaction) {
+            compiled = compactContext(compiled, cfg)
         }
 
         return compiled
@@ -191,12 +193,12 @@ class ContextEngine(
     /**
      * Build conversation history with priority-based selection.
      */
-    private fun buildConversationHistory(session: AgentSession): List<ContextMessage> {
+    private fun buildConversationHistory(session: AgentSession, cfg: ContextConfig): List<ContextMessage> {
         val messages = mutableListOf<ContextMessage>()
 
         // Priority: recent conversation turns (mandatory system/safety text lives
         // in systemInstructions/projectInstructions, never trimmed).
-        val recentMessages = session.messages.takeLast(config.maxRecentMessages)
+        val recentMessages = session.messages.takeLast(cfg.maxRecentMessages)
 
         for (msg in recentMessages) {
             messages.add(
@@ -299,7 +301,7 @@ class ContextEngine(
      * Compact context when over token budget. Never deletes the canonical
      * persisted transcript; only the model-facing representation is trimmed.
      */
-    private fun compactContext(context: CompiledContext): CompiledContext {
+    private fun compactContext(context: CompiledContext, cfg: ContextConfig): CompiledContext {
         val history = context.conversationHistory.toMutableList()
         val fileExcerpts = context.fileExcerpts.toMutableList()
 
@@ -308,7 +310,7 @@ class ContextEngine(
             tokenEstimator.estimate(context.userRequest) +
             context.toolDefinitions.sumOf { tokenEstimator.estimate(it.name) + tokenEstimator.estimate(it.description) }
 
-        var availableTokens = config.dynamicTokenBudget - mandatoryTokens
+        var availableTokens = cfg.dynamicTokenBudget - mandatoryTokens
         if (availableTokens <= 0) {
             return context.copy(
                 conversationHistory = history.takeLast(3),
@@ -338,11 +340,11 @@ class ContextEngine(
 
         var historyTokens = historyTokens(history)
         if (historyTokens > availableTokens) {
-            val summary = summarizeHistory(history, config.summaryTokenBudget)
+            val summary = summarizeHistory(history, cfg.summaryTokenBudget)
             val summaryTokens = tokenEstimator.estimate(summary)
 
             if (summaryTokens <= availableTokens) {
-                val keepRecent = minOf(config.maxRecentMessages, history.size)
+                val keepRecent = minOf(cfg.maxRecentMessages, history.size)
                 val recentMessages = history.takeLast(keepRecent)
                 val summaryMessage = ContextMessage(
                     role = "system",

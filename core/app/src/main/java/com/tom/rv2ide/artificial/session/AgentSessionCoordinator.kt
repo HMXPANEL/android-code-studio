@@ -55,8 +55,19 @@ class AgentSessionCoordinator(
     private val relevanceEngine = RelevanceEngine(indexer)
 
     val contextEngine: ContextEngine = ContextEngine(store, indexer, relevanceEngine)
+    val memoryStore: ProjectMemoryStore = ProjectMemoryStore(projectRoot)
+    val settingsStore: ProjectAgentSettings = ProjectAgentSettings(projectRoot)
     val sessionManager: SessionManager =
-        SessionManager(store, contextEngine, indexer, relevanceEngine, scope)
+        SessionManager(store, contextEngine, indexer, relevanceEngine, scope, memoryStore, settingsStore)
+
+    /**
+     * Stable project UUID from `.opencode/project-id.txt` (see
+     * ProjectIdentity), resolved lazily. Null while unresolved or when only
+     * path-based identity is available.
+     */
+    @Volatile
+    var currentProjectId: String? = null
+        private set
 
     @Volatile
     var currentSessionId: String? = null
@@ -68,11 +79,51 @@ class AgentSessionCoordinator(
         private set
 
     init {
+        require(!projectRoot.exists() || projectRoot.isDirectory) {
+            "Project root is not a directory: ${projectRoot.path}"
+        }
         currentSessionId = try {
             loadCurrentId()
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * Resolves the stable project ID, creating the marker on write paths.
+     * Never throws: null means path-based identity (with [lastError] set only
+     * when creation itself failed unexpectedly — plain absence is normal for
+     * read paths, which must not create anything).
+     */
+    private fun stableIdForWrite(): String? = try {
+        when (val r = ProjectIdentity.getOrCreate(projectRoot)) {
+            is ProjectIdentity.Resolution.Stable -> {
+                currentProjectId = r.id
+                r.id
+            }
+            is ProjectIdentity.Resolution.PathFallback -> {
+                currentProjectId = null
+                null
+            }
+        }
+    } catch (e: Exception) {
+        lastError = e.message ?: "project identity failed"
+        null
+    }
+
+    /** Read-only probe for list/switch paths: never creates the marker. */
+    private fun stableIdForRead(): String? = try {
+        when (val r = ProjectIdentity.resolve(projectRoot)) {
+            is ProjectIdentity.Resolution.Stable -> {
+                currentProjectId = r.id
+                r.id
+            }
+            // Keep any previously resolved ID: a transiently unreadable marker
+            // must not silently re-scope discovery mid-conversation.
+            is ProjectIdentity.Resolution.PathFallback -> currentProjectId
+        }
+    } catch (e: Exception) {
+        currentProjectId
     }
 
     /**
@@ -89,7 +140,10 @@ class AgentSessionCoordinator(
                     lastError = null
                     return@withContext remembered
                 }
-                val created = sessionManager.createSession(projectRoot, mode, providerId, modelId)
+                val created = sessionManager.createSession(
+                    projectRoot, mode, providerId, modelId,
+                    projectId = stableIdForWrite()
+                )
                 setCurrent(created.id)
                 lastError = null
                 created.id
@@ -103,7 +157,10 @@ class AgentSessionCoordinator(
     suspend fun startNewSession(mode: RunMode, providerId: String, modelId: String): String? =
         withContext(Dispatchers.IO) {
             try {
-                val created = sessionManager.createSession(projectRoot, mode, providerId, modelId)
+                val created = sessionManager.createSession(
+                    projectRoot, mode, providerId, modelId,
+                    projectId = stableIdForWrite()
+                )
                 setCurrent(created.id)
                 lastError = null
                 created.id
@@ -119,11 +176,15 @@ class AgentSessionCoordinator(
         lastError = null
     }
 
-    /** Switches to an existing session. Returns false when it does not exist. */
+    /**
+     * Switches to an existing session. Returns false when it does not exist
+     * or belongs to another project (stable ID mismatch).
+     */
     suspend fun switchTo(id: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val session = sessionManager.getSession(id) ?: return@withContext false
-            if (session.projectRoot != canonicalRoot()) return@withContext false
+            val pid = stableIdForRead()
+            if (!sessionManager.belongsTo(session, canonicalRoot(), pid)) return@withContext false
             setCurrent(session.id)
             lastError = null
             true
@@ -135,12 +196,30 @@ class AgentSessionCoordinator(
 
     suspend fun listSessions(): List<AgentSession> = withContext(Dispatchers.IO) {
         try {
-            val sessions = sessionManager.listSessions(projectRoot)
+            val sessions = sessionManager.listSessions(projectRoot, stableIdForRead())
             lastError = null
             sessions
         } catch (e: Exception) {
             lastError = e.message ?: "session storage failed"
             emptyList()
+        }
+    }
+
+    /** Malformed record names reported (never moved/deleted) by the file store. */
+    suspend fun corruptRecords(): List<String> = withContext(Dispatchers.IO) {
+        try {
+            sessionManager.corruptRecords()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Git-ignore coverage for `.opencode/` in this project, for UI hints. */
+    suspend fun gitIgnoreStatus(): ProjectGitIgnore.Status = withContext(Dispatchers.IO) {
+        try {
+            ProjectGitIgnore.status(projectRoot)
+        } catch (e: Exception) {
+            ProjectGitIgnore.Status.NOT_A_REPO
         }
     }
 

@@ -38,7 +38,9 @@ class SessionManager(
     private val contextEngine: ContextEngine,
     private val projectIndexer: ProjectIndexer,
     private val relevanceEngine: RelevanceEngine,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val memoryStore: ProjectMemoryStore? = null,
+    private val settingsStore: ProjectAgentSettings? = null
 ) {
 
     suspend fun createSession(
@@ -46,22 +48,47 @@ class SessionManager(
         mode: RunMode,
         providerId: String,
         modelId: String,
-        title: String? = null
+        title: String? = null,
+        projectId: String? = null
     ): AgentSession {
         val session = AgentSession(
             projectRoot = projectRoot.canonicalPath,
             mode = mode,
             providerId = providerId,
             modelId = modelId,
-            title = title ?: "Session ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())}"
+            title = title ?: "Session ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())}",
+            projectId = projectId
         )
         return sessionStore.create(session)
     }
 
     suspend fun getSession(id: String): AgentSession? = sessionStore.getWithHistory(id)
 
-    suspend fun listSessions(projectRoot: File): List<AgentSession> {
-        return sessionStore.list(projectRoot.canonicalPath)
+    /**
+     * Lists sessions belonging to [projectRoot]'s store directory.
+     *
+     * When [projectId] (the stable marker ID) is known, records carrying that
+     * ID are included even if their stored path differs (moved/renamed
+     * project), legacy records without an ID are adopted by directory
+     * membership, and records carrying a *different* ID are excluded. With a
+     * null [projectId] the legacy path-only behavior is preserved exactly.
+     */
+    suspend fun listSessions(projectRoot: File, projectId: String? = null): List<AgentSession> {
+        val path = canonical(projectRoot)
+        return sessionStore.listAll().filter { session -> belongsTo(session, path, projectId) }
+    }
+
+    /** Shared ownership predicate for listing and switching. */
+    fun belongsTo(session: AgentSession, projectPath: String, projectId: String?): Boolean {
+        if (projectId == null) return session.projectRoot == projectPath
+        if (!session.projectId.isNullOrEmpty()) return session.projectId == projectId
+        return true
+    }
+
+    private fun canonical(root: File): String = try {
+        root.canonicalPath
+    } catch (e: Exception) {
+        root.absolutePath
     }
 
     fun observeSessions(projectRoot: File): Flow<List<AgentSession>> {
@@ -180,8 +207,39 @@ class SessionManager(
         userRequest: String,
         availableTools: List<Tool>
     ): CompiledContext {
-        return contextEngine.compileContext(run, projectRoot, userRequest, availableTools)
+        val facts = try {
+            memoryStore?.getFacts().orEmpty()
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val projectInstructions = if (facts.isEmpty()) {
+            null
+        } else {
+            "Project memory (explicitly recorded facts):\n" + facts.joinToString("\n") { "- $it" }
+        }
+        val budget = try {
+            settingsStore?.getMaxContextTokens()
+        } catch (e: Exception) {
+            null
+        }
+        val override = if (budget != null) {
+            contextEngine.config.copy(maxContextTokens = budget)
+        } else {
+            null
+        }
+        return contextEngine.compileContext(
+            run, projectRoot, userRequest, availableTools,
+            projectInstructions = projectInstructions,
+            contextConfig = override
+        )
     }
+
+    /**
+     * Malformed session record names reported by the file store (left in
+     * place, never moved or deleted). Empty for in-memory stores.
+     */
+    fun corruptRecords(): List<String> =
+        (sessionStore as? FileSessionStore)?.corruptRecords() ?: emptyList()
 
     fun getIndexStats(projectRoot: File): IndexStats? {
         return projectIndexer.getStats(projectRoot)

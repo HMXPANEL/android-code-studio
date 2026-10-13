@@ -129,6 +129,9 @@ class AgentSessionCoordinatorTest {
             override suspend fun list(projectRoot: String): List<AgentSession> =
                 throw java.io.IOException("disk gone")
 
+            override suspend fun listAll(): List<AgentSession> =
+                throw java.io.IOException("disk gone")
+
             override suspend fun update(session: AgentSession): AgentSession =
                 throw java.io.IOException("disk gone")
 

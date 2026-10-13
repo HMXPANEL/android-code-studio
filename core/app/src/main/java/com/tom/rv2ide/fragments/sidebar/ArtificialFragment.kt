@@ -338,7 +338,18 @@ class ArtificialFragment(
     }
 
     private fun openHistory() {
-        showOverlay(AIHistoryFragment.newInstance(aiAgent), "ai_history")
+        val root = try {
+            if (userRootProject.isBlank()) null else File(userRootProject)
+        } catch (e: Exception) {
+            null
+        }
+        showOverlay(
+            AIHistoryFragment.newInstance(aiAgent, root) { id ->
+                resumeSession(id)
+                showMainContent()
+            },
+            "ai_history"
+        )
     }
 
     // --------------------------------------------------------------------------
@@ -421,7 +432,24 @@ class ArtificialFragment(
             } catch (e: Exception) {
                 emptyList()
             }
+            val corrupt = try {
+                coordinator.corruptRecords()
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val gitIgnored = try {
+                coordinator.gitIgnoreStatus() !=
+                    com.tom.rv2ide.artificial.session.ProjectGitIgnore.Status.RULE_MISSING
+            } catch (e: Exception) {
+                true
+            }
             if (!isAdded) return@launch
+            if (corrupt.isNotEmpty()) {
+                showSnackbar(getString(R.string.ai_history_sessions_corrupt, corrupt.size))
+            }
+            if (!gitIgnored) {
+                showSnackbar(getString(R.string.ai_history_gitignore_hint))
+            }
             if (sessions.isEmpty()) {
                 showSnackbar(getString(R.string.ai_chat_sessions_empty))
                 return@launch
@@ -547,7 +575,13 @@ class ArtificialFragment(
         }
     }
 
-    private fun resumeSession(id: String) {
+    /**
+     * Reopens a persisted conversation: switches the session pointer and
+     * replays its text turns into chat bubbles. Public so the History screen
+     * can resume conversations; cancels any active run first so late
+     * responses cannot leak into the resumed conversation.
+     */
+    fun resumeSession(id: String) {
         // Cancel first so a late response from the previous conversation can
         // never render into (or persist into) the resumed one: every run
         // carries its own sessionId.

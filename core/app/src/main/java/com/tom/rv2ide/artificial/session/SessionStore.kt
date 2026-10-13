@@ -31,6 +31,10 @@ import java.util.UUID
 /**
  * A session represents a single agent conversation with full history.
  * Mode is stored via RunMode's built-in serializer (see Tool.kt).
+ *
+ * [projectId] is the stable UUID from `<project>/.opencode/project-id.txt`
+ * (see ProjectIdentity). Null for records written before stable IDs existed;
+ * those remain discoverable by project path (see SessionManager.listSessions).
  */
 @Serializable
 data class AgentSession(
@@ -45,7 +49,8 @@ data class AgentSession(
     var messages: List<PersistedMessage> = emptyList(),
     var toolCalls: List<PersistedToolCall> = emptyList(),
     var checkpoints: List<Checkpoint> = emptyList(),
-    var metadata: Map<String, String> = emptyMap()
+    var metadata: Map<String, String> = emptyMap(),
+    val projectId: String? = null
 ) {
     fun copyWith(
         title: String? = null,
@@ -132,6 +137,12 @@ interface SessionStore {
     suspend fun create(session: AgentSession): AgentSession
     suspend fun get(id: String): AgentSession?
     suspend fun list(projectRoot: String): List<AgentSession>
+    /**
+     * Every record physically present in this store's directory, regardless of
+     * stored path. Lets owners adopt moved/renamed projects' legacy records by
+     * directory membership (see SessionManager.listSessions).
+     */
+    suspend fun listAll(): List<AgentSession>
     suspend fun update(session: AgentSession): AgentSession
     suspend fun delete(id: String): Boolean
     fun observe(projectRoot: String): Flow<List<AgentSession>>
@@ -153,11 +164,28 @@ class FileSessionStore(
     private val sessionsDir: File = File(baseDir, ".opencode/sessions").apply { mkdirs() }
     private val sessionsFlow = MutableStateFlow(emptyList<AgentSession>())
 
+    /**
+     * Names of session files that failed to parse on the last load. The files
+     * are deliberately left in place (never auto-deleted or overwritten); see
+     * [corruptRecords]. Refreshed by every [loadAll].
+     */
+    private val corruptNames = mutableListOf<String>()
+
     init {
         loadAll()
     }
 
-    private fun sessionFile(id: String): File = File(sessionsDir, "$id.json")
+    /**
+     * Resolves a record file, rejecting anything that could escape
+     * [sessionsDir]. Session IDs are UUIDs generated internally; anything else
+     * is treated as hostile input, never as a path.
+     */
+    private fun sessionFile(id: String): File {
+        require(id.isNotBlank() && '/' !in id && '\\' !in id && ".." !in id) {
+            "Invalid session id"
+        }
+        return File(sessionsDir, "$id.json")
+    }
 
     private fun readSession(file: File): AgentSession? = try {
         json.decodeFromString<AgentSession>(file.readText())
@@ -166,13 +194,26 @@ class FileSessionStore(
     }
 
     private fun loadAll() {
-        val sessions = sessionsDir.listFiles()
+        val sessions = mutableListOf<AgentSession>()
+        val corrupt = mutableListOf<String>()
+        sessionsDir.listFiles()
             ?.filter { it.extension == "json" }
-            ?.mapNotNull { readSession(it) }
-            ?.sortedByDescending { it.updatedAt }
-            ?: emptyList()
-        sessionsFlow.value = sessions
+            ?.forEach { file ->
+                val session = readSession(file)
+                if (session != null) sessions.add(session) else corrupt.add(file.name)
+            }
+        sessions.sortByDescending { it.updatedAt }
+        sessionsFlow.value = sessions.toList()
+        corruptNames.clear()
+        corruptNames.addAll(corrupt.sorted())
     }
+
+    /**
+     * Malformed record file names from the last load, for visible reporting.
+     * Quarantine policy: report only — files are never moved, deleted, or
+     * overwritten by the store.
+     */
+    fun corruptRecords(): List<String> = corruptNames.toList()
 
     override suspend fun create(session: AgentSession): AgentSession {
         sessionFile(session.id).writeText(json.encodeToString(session))
@@ -181,12 +222,20 @@ class FileSessionStore(
     }
 
     override suspend fun get(id: String): AgentSession? {
-        val file = sessionFile(id)
+        val file = try {
+            sessionFile(id)
+        } catch (e: IllegalArgumentException) {
+            return null
+        }
         return if (file.exists()) readSession(file) else null
     }
 
     override suspend fun list(projectRoot: String): List<AgentSession> {
         return sessionsFlow.value.filter { it.projectRoot == projectRoot }
+    }
+
+    override suspend fun listAll(): List<AgentSession> {
+        return sessionsFlow.value.toList()
     }
 
     override suspend fun update(session: AgentSession): AgentSession {
@@ -197,7 +246,12 @@ class FileSessionStore(
     }
 
     override suspend fun delete(id: String): Boolean {
-        val deleted = sessionFile(id).delete()
+        val file = try {
+            sessionFile(id)
+        } catch (e: IllegalArgumentException) {
+            return false
+        }
+        val deleted = file.delete()
         if (deleted) loadAll()
         return deleted
     }
@@ -229,6 +283,10 @@ class InMemorySessionStore : SessionStore {
             .sortedByDescending { it.updatedAt }
     }
 
+    override suspend fun listAll(): List<AgentSession> {
+        return sessions.values.sortedByDescending { it.updatedAt }
+    }
+
     override suspend fun update(session: AgentSession): AgentSession {
         val updated = session.copyWith(updatedAt = System.currentTimeMillis())
         sessions[session.id] = updated
@@ -251,4 +309,30 @@ class InMemorySessionStore : SessionStore {
     private fun updateFlow() {
         sessionsFlow.value = sessions.values.toList()
     }
+}
+
+/**
+ * Display model for one saved conversation in history UI. Pure data — date
+ * formatting stays in the UI layer (locale-dependent). Deliberately distinct
+ * from [com.tom.rv2ide.artificial.agents.UnifiedModificationAttempt]: chat
+ * conversations must never be mislabeled as file modifications.
+ */
+data class ConversationRow(
+    val sessionId: String,
+    val title: String,
+    val messageCount: Int,
+    val toolCallCount: Int,
+    val updatedAt: Long
+)
+
+/** Maps a persisted session to its history row. Total functions, no I/O. */
+fun AgentSession.toConversationRow(): ConversationRow {
+    val calls = messages.sumOf { it.toolCalls.size }
+    return ConversationRow(
+        sessionId = id,
+        title = title.ifBlank { "Untitled conversation" },
+        messageCount = messages.size,
+        toolCallCount = calls,
+        updatedAt = updatedAt
+    )
 }

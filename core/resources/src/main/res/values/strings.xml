@@ -581,8 +581,8 @@
   <string name="lsp_server_downloading_status">Downloading…</string>
   <string name="lsp_server_progress_percentage">%d%%</string>
   <string name="lsp_server_extracting">Extracting files…</string>
-  <string name="lsp_server_install_success">%s server installed successfully!\n%d files extracted.</string>
-  <string name="lsp_server_download_failed">Failed to download %s:\n%s</string>
+  <string name="lsp_server_install_success">%1$s server installed successfully!\n%2$d files extracted.</string>
+  <string name="lsp_server_download_failed">Failed to download %1$s:\n%2$s</string>
 
   <!-- LSP Server Dialog Titles -->
   <string name="lsp_server_error_title">Download Failed</string>

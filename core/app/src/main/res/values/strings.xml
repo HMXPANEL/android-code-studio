@@ -87,7 +87,7 @@
   <string name="ai_history_sessions_unavailable">Saved conversations unavailable for this project</string>
   <string name="ai_history_project_readonly">Project folder is not writable — conversations cannot be saved here</string>
   <string name="ai_history_sessions_corrupt">%1$d unreadable session records left untouched</string>
-  <string name="ai_history_gitignore_hint">Tip: add .opencode/ to this project's .gitignore to keep AI sessions out of Git</string>
+  <string name="ai_history_gitignore_hint">Tip: add .opencode/ to the project gitignore file to keep AI sessions out of Git</string>
   <string name="ai_chat_sessions_title">Conversations</string>
   <string name="ai_chat_sessions_empty">No saved conversations yet</string>
   <string name="ai_chat_session_new">New</string>

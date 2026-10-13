@@ -42,7 +42,7 @@ class ConversationAdapter(
 
     override fun getItemCount(): Int = items.size
 
-    class ConversationViewHolder(
+    inner class ConversationViewHolder(
         itemView: View,
         private val onClick: (sessionId: String) -> Unit
     ) : RecyclerView.ViewHolder(itemView) {

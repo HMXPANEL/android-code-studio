@@ -161,7 +161,10 @@ class FileSessionStore(
     }
 ) : SessionStore {
 
-    private val sessionsDir: File = File(baseDir, ".opencode/sessions").apply { mkdirs() }
+    // NOTE: no mkdirs here by design. The directory is created lazily on the
+    // first write (create/update) so that merely opening History or resolving
+    // a coordinator never fabricates empty `.opencode/sessions/` directories.
+    private val sessionsDir: File = File(baseDir, ".opencode/sessions")
     private val sessionsFlow = MutableStateFlow(emptyList<AgentSession>())
 
     /**
@@ -215,7 +218,22 @@ class FileSessionStore(
      */
     fun corruptRecords(): List<String> = corruptNames.toList()
 
+    /** The resolved sessions directory (may not exist yet — see lazy mkdirs). */
+    fun sessionsDir(): File = sessionsDir
+
+    /**
+     * Creates parent directories on first write only. Throws with a clear
+     * message when the project location is not writable, so callers can
+     * surface the failure instead of silently losing the session.
+     */
+    private fun ensureSessionsDir() {
+        if (!sessionsDir.isDirectory && !sessionsDir.mkdirs()) {
+            throw IllegalStateException("Cannot create session directory: ${sessionsDir.name}")
+        }
+    }
+
     override suspend fun create(session: AgentSession): AgentSession {
+        ensureSessionsDir()
         sessionFile(session.id).writeText(json.encodeToString(session))
         loadAll()
         return session
@@ -240,6 +258,7 @@ class FileSessionStore(
 
     override suspend fun update(session: AgentSession): AgentSession {
         val updated = session.copyWith(updatedAt = System.currentTimeMillis())
+        ensureSessionsDir()
         sessionFile(session.id).writeText(json.encodeToString(updated))
         loadAll()
         return updated

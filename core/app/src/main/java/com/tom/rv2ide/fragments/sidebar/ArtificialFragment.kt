@@ -1056,6 +1056,48 @@ class ArtificialFragment(
         executionJob = lifecycleScope.launch {
             viewModel.setWorking(true)
             val workingIndex = viewModel.startWorkingMessage(getString(R.string.ai_chat_working))
+            // Phase 3.2.2: the legacy one-shot path persists like the loop path.
+            // Without this, BUILD messages sent with the loop toggle off leave
+            // zero session records (no files under .opencode/sessions/).
+            val coordinator = try {
+                ensureSessionCoordinator()
+            } catch (e: Exception) {
+                null
+            }
+            val sessionId = try {
+                coordinator?.sessionIdFor(
+                    RunMode.BUILD,
+                    try { aiAgent.getCurrentProviderName() } catch (e: Exception) { "unknown" },
+                    try { aiAgent.getCurrentModelName() } catch (e: Exception) { "unknown" }
+                )
+            } catch (e: Exception) {
+                null
+            }
+            if (sessionId == null && coordinator?.lastError != null) {
+                showSnackbar(getString(R.string.ai_chat_session_unavailable))
+                android.util.Log.d(
+                    TAG_AGENT,
+                    "SESSION_DISABLED reason=${coordinator?.lastErrorType}"
+                )
+            }
+            var persistSession = sessionId != null
+            if (persistSession) {
+                try {
+                    coordinator?.sessionManager?.addUserMessage(sessionId!!, userRequest)
+                } catch (e: Exception) {
+                    // A user message that cannot be recorded must not abort the
+                    // answer; continue session-free for this run.
+                    persistSession = false
+                    android.util.Log.d(
+                        TAG_AGENT,
+                        "SESSION_WRITE_FAILED reason=${e.javaClass.simpleName}"
+                    )
+                }
+            }
+            // Captured from the callback below: only a delivered answer is
+            // persisted, so the store never contains replies the user saw as
+            // errors or cancellations.
+            var finalText: String? = null
             try {
                 aiAgent.executeRequest(userRequest, object : AIAgentManager.AIAgentCallback {
                     override fun onProcessing(message: String) {
@@ -1082,7 +1124,7 @@ class ArtificialFragment(
                         modifications: List<AIAgentManager.ModificationResult>,
                         summary: AIAgentManager.ModificationSummary
                     ) {
-                        val finalText = buildString {
+                        val finalTextValue = buildString {
                             if (response.isNotBlank()) append(response)
                             val summaryText = buildSummaryText(summary)
                             if (summaryText.isNotBlank()) {
@@ -1090,7 +1132,8 @@ class ArtificialFragment(
                                 append(summaryText)
                             }
                         }.ifBlank { getString(R.string.ai_chat_working) }
-                        viewModel.finalizeWorkingMessage(workingIndex, finalText)
+                        finalText = finalTextValue
+                        viewModel.finalizeWorkingMessage(workingIndex, finalTextValue)
 
                         if (modifications.isNotEmpty()) {
                             val file = File(modifications.first().filePath)
@@ -1104,6 +1147,7 @@ class ArtificialFragment(
                         response: String,
                         summary: AIAgentManager.ModificationSummary
                     ) {
+                        finalText = response
                         viewModel.finalizeWorkingMessage(workingIndex, response)
                     }
 
@@ -1122,6 +1166,18 @@ class ArtificialFragment(
                 viewModel.failWorkingMessage(workingIndex, "❌ Error: ${e.message}")
             } finally {
                 viewModel.setWorking(false)
+            }
+            // Awaited after the provider returns: the assistant record lands in
+            // the same session file as the user message above.
+            if (persistSession && finalText != null) {
+                try {
+                    coordinator?.sessionManager?.addAssistantMessage(sessionId!!, finalText!!)
+                } catch (e: Exception) {
+                    android.util.Log.d(
+                        TAG_AGENT,
+                        "SESSION_WRITE_FAILED reason=${e.javaClass.simpleName}"
+                    )
+                }
             }
         }
     }

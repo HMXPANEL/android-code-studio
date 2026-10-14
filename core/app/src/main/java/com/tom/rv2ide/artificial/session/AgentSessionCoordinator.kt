@@ -24,6 +24,35 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
+ * Sanitized debug snapshot of session persistence health. Deliberately contains
+ * no message content, no filesystem paths, no keys and no secrets: the project
+ * root appears only as a SHA-256 hex digest, failures only as exception type
+ * names. Safe for debug logs and bug reports.
+ */
+data class SessionDiagnostics(
+    val rootHash: String,
+    val sessionsDirExists: Boolean,
+    val sessionsDirWritable: Boolean,
+    val sessionFileCount: Int,
+    val hasCurrentSession: Boolean,
+    val currentUserMessages: Int,
+    val currentAssistantMessages: Int,
+    val lastErrorType: String?
+) {
+    companion object {
+        fun unavailable(): SessionDiagnostics = SessionDiagnostics(
+            rootHash = "unavailable",
+            sessionsDirExists = false,
+            sessionsDirWritable = false,
+            sessionFileCount = 0,
+            hasCurrentSession = false,
+            currentUserMessages = 0,
+            currentAssistantMessages = 0,
+            lastErrorType = "probe-failed"
+        )
+    }
+}
+/**
  * Owns one conversation's session lifecycle for a single project root.
  *
  * The UI layer (ArtificialFragment) keeps one coordinator per open project and
@@ -78,6 +107,16 @@ class AgentSessionCoordinator(
     var lastError: String? = null
         private set
 
+    /**
+     * Simple class name of the last failure's exception (e.g.
+     * "IllegalStateException"), or null when the last operation succeeded.
+     * Unlike [lastError], this never contains paths or other details, so it
+     * is safe for debug logs.
+     */
+    @Volatile
+    var lastErrorType: String? = null
+        private set
+
     init {
         require(!projectRoot.exists() || projectRoot.isDirectory) {
             "Project root is not a directory: ${projectRoot.path}"
@@ -107,7 +146,7 @@ class AgentSessionCoordinator(
             }
         }
     } catch (e: Exception) {
-        lastError = e.message ?: "project identity failed"
+        noteFailure(e, "project identity failed")
         null
     }
 
@@ -137,7 +176,7 @@ class AgentSessionCoordinator(
             try {
                 val remembered = currentSessionId
                 if (remembered != null && store.get(remembered) != null) {
-                    lastError = null
+                    clearFailure()
                     return@withContext remembered
                 }
                 val created = sessionManager.createSession(
@@ -145,10 +184,10 @@ class AgentSessionCoordinator(
                     projectId = stableIdForWrite()
                 )
                 setCurrent(created.id)
-                lastError = null
+                clearFailure()
                 created.id
             } catch (e: Exception) {
-                lastError = e.message ?: "session storage failed"
+                noteFailure(e, "session storage failed")
                 null
             }
         }
@@ -162,10 +201,10 @@ class AgentSessionCoordinator(
                     projectId = stableIdForWrite()
                 )
                 setCurrent(created.id)
-                lastError = null
+                clearFailure()
                 created.id
             } catch (e: Exception) {
-                lastError = e.message ?: "session storage failed"
+                noteFailure(e, "session storage failed")
                 null
             }
         }
@@ -173,7 +212,7 @@ class AgentSessionCoordinator(
     /** Drops the current conversation pointer without deleting stored history. */
     suspend fun forgetCurrent() = withContext(Dispatchers.IO) {
         setCurrent(null)
-        lastError = null
+        clearFailure()
     }
 
     /**
@@ -186,10 +225,10 @@ class AgentSessionCoordinator(
             val pid = stableIdForRead()
             if (!sessionManager.belongsTo(session, canonicalRoot(), pid)) return@withContext false
             setCurrent(session.id)
-            lastError = null
+            clearFailure()
             true
         } catch (e: Exception) {
-            lastError = e.message ?: "session storage failed"
+            noteFailure(e, "session storage failed")
             false
         }
     }
@@ -197,10 +236,10 @@ class AgentSessionCoordinator(
     suspend fun listSessions(): List<AgentSession> = withContext(Dispatchers.IO) {
         try {
             val sessions = sessionManager.listSessions(projectRoot, stableIdForRead())
-            lastError = null
+            clearFailure()
             sessions
         } catch (e: Exception) {
-            lastError = e.message ?: "session storage failed"
+            noteFailure(e, "session storage failed")
             emptyList()
         }
     }
@@ -227,7 +266,7 @@ class AgentSessionCoordinator(
         try {
             sessionManager.getSession(id)
         } catch (e: Exception) {
-            lastError = e.message ?: "session storage failed"
+            noteFailure(e, "session storage failed")
             null
         }
     }
@@ -237,7 +276,7 @@ class AgentSessionCoordinator(
             try {
                 sessionManager.renameSession(id, newTitle)
             } catch (e: Exception) {
-                lastError = e.message ?: "session storage failed"
+                noteFailure(e, "session storage failed")
                 false
             }
         }
@@ -246,16 +285,63 @@ class AgentSessionCoordinator(
         try {
             val deleted = sessionManager.deleteSession(id)
             if (deleted && currentSessionId == id) setCurrent(null)
-            lastError = null
+            clearFailure()
             deleted
         } catch (e: Exception) {
-            lastError = e.message ?: "session storage failed"
+            noteFailure(e, "session storage failed")
             false
         }
     }
 
     fun clearError() {
+        clearFailure()
+    }
+
+    private fun noteFailure(e: Exception, default: String) {
+        lastError = e.message ?: default
+        lastErrorType = e.javaClass.simpleName
+    }
+
+    private fun clearFailure() {
         lastError = null
+        lastErrorType = null
+    }
+
+    /**
+     * Sanitized health snapshot for debug logs and bug reports. Never throws
+     * and never contains message content, filesystem paths, keys, or secrets.
+     */
+    suspend fun diagnostics(): SessionDiagnostics = withContext(Dispatchers.IO) {
+        try {
+            val dir = (store as? FileSessionStore)?.sessionsDir()
+            val current = currentSessionId?.let {
+                try {
+                    store.getWithHistory(it)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            val messages = current?.messages.orEmpty()
+            SessionDiagnostics(
+                rootHash = sha256Hex(canonicalRoot()),
+                sessionsDirExists = dir?.isDirectory == true,
+                sessionsDirWritable = dir?.canWrite() == true,
+                sessionFileCount = dir?.listFiles { f -> f.extension == "json" }?.size ?: 0,
+                hasCurrentSession = current != null,
+                currentUserMessages = messages.count { it.role == MessageRole.USER },
+                currentAssistantMessages = messages.count { it.role == MessageRole.ASSISTANT },
+                lastErrorType = lastErrorType
+            )
+        } catch (e: Exception) {
+            SessionDiagnostics.unavailable()
+        }
+    }
+
+    private fun sha256Hex(text: String): String = try {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        digest.digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    } catch (e: Exception) {
+        "unavailable"
     }
 
     private fun setCurrent(id: String?) {
